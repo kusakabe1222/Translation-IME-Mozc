@@ -19,6 +19,7 @@
 #include "protocol/commands.pb.h"
 #include "win32/tip/tip_edit_session.h"
 #include "win32/tip/tip_private_context.h"
+#include "win32/tip/tip_surrounding_text.h"
 #include "win32/tip/tip_text_service.h"
 #include "win32/tip/translation/HttpTranslator.h"
 #include "win32/tip/translation/TranslationCache.h"
@@ -47,7 +48,10 @@ struct State {
   bool active = false;   // translations replace the candidates
   bool loading = false;
   bool shift_pending = false;  // Shift is down and nothing else was pressed
+  bool selection = false;  // translating the application's selection, not the composition
+  std::wstring pending_selection;  // selected text found for Shift+Henkan (Decide)
   std::wstring source;
+  std::wstring source_language;  // "JA", or empty to auto-detect
   std::wstring engine;
   std::wstring key;      // cache key of the shown translations
   std::vector<TranslationItem> items;   // successful translations
@@ -135,6 +139,7 @@ void EndTranslation(State* state) {
   }
   state->original.Clear();
   state->overlay_label.clear();
+  state->selection = false;
   state->active = false;
   state->loading = false;
   state->context.reset();
@@ -236,15 +241,14 @@ bool IsComposing(TipTextService* text_service, ITfContext* context) {
          !PreeditText(private_context->last_output()).empty();
 }
 
-// Shift: translate the whole composition (as currently converted).
-void StartTranslation(TipTextService* text_service, ITfContext* context) {
+// Shows the translations of |source| in the candidate window. With |selection|
+// the text is the application's selection, replaced on commit; otherwise it is
+// the composition (as currently converted).
+void BeginTranslation(TipTextService* text_service, ITfContext* context,
+                      const std::wstring& source, bool selection) {
   State* state = GetState();
   TipPrivateContext* private_context = text_service->GetPrivateContext(context);
-  if (private_context == nullptr) {
-    return;
-  }
-  const std::wstring source = PreeditText(private_context->last_output());
-  if (source.empty()) {
+  if (private_context == nullptr || source.empty()) {
     return;
   }
 
@@ -252,6 +256,7 @@ void StartTranslation(TipTextService* text_service, ITfContext* context) {
   state->text_service = text_service;
   state->context = context;
   state->active = true;
+  state->selection = selection;
   state->source = source;
   state->original = private_context->last_output();
 
@@ -265,7 +270,15 @@ void StartTranslation(TipTextService* text_service, ITfContext* context) {
     return;
   }
 
-  state->key = CTranslationCache::MakeKey(config, HttpTranslator::Japanese, source);
+  // A selection in another language is auto-detected and translated into Japanese.
+  const bool japanese = !selection || HttpTranslator::LooksJapanese(source);
+  state->source_language =
+      japanese ? std::wstring(HttpTranslator::Japanese) : std::wstring();
+  if (!japanese) {
+    config.targetLanguages.assign(1, HttpTranslator::Japanese);
+  }
+
+  state->key = CTranslationCache::MakeKey(config, state->source_language, source);
   std::vector<TranslationItem> cached;
   if (state->cache.Lookup(state->key, cached)) {
     ShowItems(state, cached, std::wstring());
@@ -279,7 +292,7 @@ void StartTranslation(TipTextService* text_service, ITfContext* context) {
   if (state->pending_key != state->key) {
     state->request_id++;
     if (EnsureWindow(state) &&
-        HttpTranslator::TranslateAsync(config, source, HttpTranslator::Japanese,
+        HttpTranslator::TranslateAsync(config, source, state->source_language,
                                        state->request_id, state->mailbox)) {
       state->pending_key = state->key;
     } else {
@@ -290,6 +303,25 @@ void StartTranslation(TipTextService* text_service, ITfContext* context) {
   ShowOverlay(state);
 }
 
+// Shift: translate the whole composition (as currently converted).
+void StartTranslation(TipTextService* text_service, ITfContext* context) {
+  TipPrivateContext* private_context = text_service->GetPrivateContext(context);
+  if (private_context != nullptr) {
+    BeginTranslation(text_service, context,
+                     PreeditText(private_context->last_output()), false);
+  }
+}
+
+// The selected text when there is a selection and no composition, else empty.
+std::wstring SelectedText(TipTextService* text_service, ITfContext* context) {
+  TipSurroundingTextInfo info;
+  if (!TipSurroundingText::Get(text_service, context, &info) ||
+      info.in_composition || !info.has_selected_text) {
+    return std::wstring();
+  }
+  return info.selected_text;
+}
+
 // Commits a translation in place of the composition.
 void Commit(TipTextService* text_service, ITfContext* context, int index) {
   State* state = GetState();
@@ -297,6 +329,8 @@ void Commit(TipTextService* text_service, ITfContext* context, int index) {
     return;
   }
   const std::wstring text = state->items[index].text;
+  const bool selection = state->selection;
+  Output output = state->original;
   state->overlay_label.clear();   // nothing to restore: the commit replaces it
   EndTranslation(state);
 
@@ -304,12 +338,19 @@ void Commit(TipTextService* text_service, ITfContext* context, int index) {
   if (private_context == nullptr) {
     return;
   }
-  // Drop the composition on the server, then commit the translation instead.
-  Output output;
-  SessionCommand command;
-  command.set_type(SessionCommand::REVERT);
-  if (!private_context->GetClient()->SendCommand(command, &output)) {
+  if (selection) {
+    // No composition: committing replaces the selected text.
+    output.clear_candidate_window();
+    output.clear_preedit();
+    output.clear_all_candidate_words();
+  } else {
+    // Drop the composition on the server, then commit the translation instead.
     output.Clear();
+    SessionCommand command;
+    command.set_type(SessionCommand::REVERT);
+    if (!private_context->GetClient()->SendCommand(command, &output)) {
+      output.Clear();
+    }
   }
   output.set_consumed(true);
   Result* result = output.mutable_result();
@@ -321,6 +362,7 @@ void Commit(TipTextService* text_service, ITfContext* context, int index) {
 enum class Action {
   kNone,      // not ours: Mozc handles the key
   kToggle,    // Shift released alone
+  kTranslateSelection,  // Shift+Henkan with a selection
   kNext,
   kPrevious,
   kCommit,
@@ -338,14 +380,27 @@ Action Decide(TipTextService* text_service, ITfContext* context,
   *index = state->selected;
 
   if (!is_key_down) {
-    if (vk == VK_SHIFT && state->shift_pending &&
-        (shown || IsComposing(text_service, context))) {
-      return Action::kToggle;
+    if (vk == VK_SHIFT && state->shift_pending) {
+      if (shown) {
+        return Action::kToggle;   // back to the conversion
+      }
+      if (IsComposing(text_service, context) && TranslationConfig::Load().enabled) {
+        return Action::kToggle;
+      }
     }
     return Action::kNone;
   }
 
   if (!shown) {
+    // Shift+Henkan translates the selection (Henkan alone is Mozc's reconversion).
+    if (vk == VK_CONVERT && IsDown(VK_SHIFT) && !IsDown(VK_CONTROL) &&
+        !IsDown(VK_MENU) && !IsComposing(text_service, context) &&
+        TranslationConfig::Load().enabled) {
+      state->pending_selection = SelectedText(text_service, context);
+      if (!state->pending_selection.empty()) {
+        return Action::kTranslateSelection;
+      }
+    }
     return Action::kNone;
   }
   if (vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU) {
@@ -454,6 +509,12 @@ bool TipTranslation::OnKey(TipTextService* text_service, ITfContext* context,
         StartTranslation(text_service, context);
       }
       break;
+    case Action::kTranslateSelection: {
+      const std::wstring text = state->pending_selection;
+      state->pending_selection.clear();
+      BeginTranslation(text_service, context, text, true);
+      break;
+    }
     case Action::kNext:
       if (count > 0) {
         state->selected = (state->selected + 1) % count;
@@ -515,11 +576,13 @@ void BuildCandidateWindow(State* state, Output* output) {
   }
 
   commands::Footer* footer = window->mutable_footer();
+  const std::wstring name = state->selection ? L"選択範囲を翻訳" : L"翻訳";
   const std::wstring title =
-      state->engine.empty() ? L"翻訳" : L"翻訳 (" + state->engine + L")";
+      state->engine.empty() ? name : name + L" (" + state->engine + L")";
+  const std::wstring hints = state->selection ? L"  Enter: 置き換え  Esc: キャンセル"
+                                              : L"  Enter: 確定  Shift: 戻る";
   footer->set_label(WideToUtf8(
-      state->note.empty() ? title + L"  Enter: 確定  Shift: 戻る"
-                          : title + L"  " + state->note));
+      state->note.empty() ? title + hints : title + L"  " + state->note));
   footer->set_index_visible(!state->items.empty());
   output->clear_all_candidate_words();
 }

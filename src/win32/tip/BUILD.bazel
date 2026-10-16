@@ -379,6 +379,7 @@ mozc_cc_library(
     deps = [
         ":tip_edit_session",
         ":tip_private_context_h",
+        ":tip_surrounding_text",
         ":tip_text_service",
         "//base/win32:wide_char",
         "//client:client_interface",

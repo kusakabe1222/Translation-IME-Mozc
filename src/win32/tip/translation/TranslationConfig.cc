@@ -216,6 +216,11 @@ TranslationConfig TranslationConfig::Load(const wchar_t* registryPath)
         {
             config.timeoutMs = (timeout < kMinTimeoutMs) ? kMinTimeoutMs : (timeout > kMaxTimeoutMs) ? kMaxTimeoutMs : timeout;
         }
+        DWORD enabled = 1;
+        if (ReadDword(key, L"Enabled", &enabled))
+        {
+            config.enabled = (enabled != 0);
+        }
         RegCloseKey(key);
     }
 
@@ -278,9 +283,11 @@ bool TranslationConfig::Save(const TranslationConfig& config, const wchar_t* reg
     KeyProtection::SecureClear(&dataKey);
 
     DWORD timeout = config.timeoutMs;
+    DWORD enabled = config.enabled ? 1 : 0;
     ok = writeString(L"Engine", config.preferredEngine == TranslationEngine::None ? std::wstring() : std::wstring(EngineName(config.preferredEngine))) && ok;
     ok = writeString(L"TargetLanguages", JoinLanguageList(config.targetLanguages)) && ok;
     ok = (RegSetValueExW(key, L"TimeoutMs", 0, REG_DWORD, reinterpret_cast<const BYTE*>(&timeout), sizeof(timeout)) == ERROR_SUCCESS) && ok;
+    ok = (RegSetValueExW(key, L"Enabled", 0, REG_DWORD, reinterpret_cast<const BYTE*>(&enabled), sizeof(enabled)) == ERROR_SUCCESS) && ok;
     RegCloseKey(key);
     return ok;
 }

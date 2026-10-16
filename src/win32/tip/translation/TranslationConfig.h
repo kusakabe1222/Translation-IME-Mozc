@@ -6,6 +6,7 @@
 //   KeyProtector     REG_BINARY Data key that encrypts the two keys above
 //   TargetLanguages  REG_SZ     Comma separated, e.g. "EN,ZH,KO,FR,ES,DE"
 //   TimeoutMs        REG_DWORD  Per-request timeout in milliseconds
+//   Enabled          REG_DWORD  0 turns translation off (Shift then does nothing); default 1
 //
 // API keys are encrypted with AES-256-GCM; the data key is protected by the TPM and DPAPI
 // (see KeyProtection.h). Keys stored by older versions (plain REG_SZ, or DPAPI only) are still
@@ -46,6 +47,7 @@ struct TranslationConfig
     std::wstring googleApiKey;
     std::vector<std::wstring> targetLanguages;   // Upper case, e.g. L"EN", L"ZH"
     DWORD timeoutMs = 8000;
+    bool enabled = true;   // translation on/off (settings app)
     // How the stored keys are protected (set by Load; None for keys from older versions).
     KeyProtection::Protection keyProtection = KeyProtection::Protection::None;
 
