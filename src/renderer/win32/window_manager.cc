@@ -288,6 +288,12 @@ void WindowManager::UpdateLayout(const commands::RendererCommand& command) {
   }
 
   const DWORD set_windows_pos_flags = SWP_NOACTIVATE | SWP_SHOWWINDOW;
+  // Translation IME: another program may have minimized the window (some
+  // screen tools do). SetWindowPos does not restore a minimized window, which
+  // would then stay a blank title-bar-sized box.
+  if (main_window_->IsIconic()) {
+    main_window_->ShowWindow(SW_SHOWNOACTIVATE);
+  }
   main_window_->SetWindowPos(HWND_TOPMOST, main_window_rect.Left(),
                              main_window_rect.Top(), main_window_rect.Width(),
                              main_window_rect.Height(), set_windows_pos_flags);

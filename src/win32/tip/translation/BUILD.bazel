@@ -1,0 +1,37 @@
+# Translation IME: translation of the composition through the DeepL / Google APIs.
+#
+# These sources are shared with the original Translation IME (TSF, SampleIME based):
+#   HttpTranslator     WinHTTP requests, asynchronous jobs and the result mailbox
+#   TranslationConfig  settings in HKCU\Software\TranslationIME (written by the settings app)
+#   KeyProtection      API key encryption (AES-256-GCM, data key in the TPM + DPAPI)
+#   Json               minimal JSON parser for the API responses
+#   TranslationCache   recent translations
+#
+# System libraries (winhttp, bcrypt, ncrypt, crypt32) are linked through #pragma comment.
+
+load(
+    "//:build_defs.bzl",
+    "MOZC_TAGS",
+    "mozc_cc_library",
+)
+
+package(default_visibility = ["//win32/tip:__subpackages__"])
+
+mozc_cc_library(
+    name = "translation",
+    srcs = [
+        "HttpTranslator.cc",
+        "Json.cc",
+        "KeyProtection.cc",
+        "TranslationConfig.cc",
+    ],
+    hdrs = [
+        "HttpTranslator.h",
+        "Json.h",
+        "KeyProtection.h",
+        "TranslationCache.h",
+        "TranslationConfig.h",
+    ],
+    tags = MOZC_TAGS.WIN_ONLY,
+    target_compatible_with = ["@platforms//os:windows"],
+)

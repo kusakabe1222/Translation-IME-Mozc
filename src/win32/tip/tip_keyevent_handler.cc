@@ -55,6 +55,7 @@
 #include "win32/tip/tip_surrounding_text.h"
 #include "win32/tip/tip_text_service.h"
 #include "win32/tip/tip_thread_context.h"
+#include "win32/tip/tip_translation.h"
 
 namespace mozc {
 namespace win32 {
@@ -473,24 +474,38 @@ constexpr bool kKeyUp = false;
 HRESULT TipKeyeventHandler::OnTestKeyDown(TipTextService* text_service,
                                           ITfContext* context, WPARAM wparam,
                                           LPARAM lparam, BOOL* eaten) {
+  // Translation IME: Shift alone shows translations; keys of that UI first.
+  if (TipTranslation::OnTestKey(text_service, context, kKeyDown, wparam,
+                                eaten)) {
+    return S_OK;
+  }
   return OnTestKey(text_service, context, kKeyDown, wparam, lparam, eaten);
 }
 
 HRESULT TipKeyeventHandler::OnTestKeyUp(TipTextService* text_service,
                                         ITfContext* context, WPARAM wparam,
                                         LPARAM lparam, BOOL* eaten) {
+  if (TipTranslation::OnTestKey(text_service, context, kKeyUp, wparam, eaten)) {
+    return S_OK;
+  }
   return OnTestKey(text_service, context, kKeyUp, wparam, lparam, eaten);
 }
 
 HRESULT TipKeyeventHandler::OnKeyDown(TipTextService* text_service,
                                       ITfContext* context, WPARAM wparam,
                                       LPARAM lparam, BOOL* eaten) {
+  if (TipTranslation::OnKey(text_service, context, kKeyDown, wparam, eaten)) {
+    return S_OK;
+  }
   return OnKey(text_service, context, kKeyDown, wparam, lparam, eaten);
 }
 
 HRESULT TipKeyeventHandler::OnKeyUp(TipTextService* text_service,
                                     ITfContext* context, WPARAM wparam,
                                     LPARAM lparam, BOOL* eaten) {
+  if (TipTranslation::OnKey(text_service, context, kKeyUp, wparam, eaten)) {
+    return S_OK;
+  }
   return OnKey(text_service, context, kKeyUp, wparam, lparam, eaten);
 }
 

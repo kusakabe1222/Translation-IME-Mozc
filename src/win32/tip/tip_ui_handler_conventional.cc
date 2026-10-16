@@ -52,6 +52,7 @@
 #include "win32/tip/tip_range_util.h"
 #include "win32/tip/tip_text_service.h"
 #include "win32/tip/tip_thread_context.h"
+#include "win32/tip/tip_translation.h"
 #include "win32/tip/tip_ui_element_manager.h"
 
 namespace mozc {
@@ -425,6 +426,7 @@ void TipUiHandlerConventional::OnActivate(TipTextService* text_service) {
 }
 
 void TipUiHandlerConventional::OnDeactivate() {
+  TipTranslation::OnDeactivate();
   Win32RendererClient::OnUIThreadUninitialized();
 }
 

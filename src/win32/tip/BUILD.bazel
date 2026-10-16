@@ -354,6 +354,7 @@ mozc_cc_library(
         ":tip_surrounding_text",
         ":tip_text_service",
         ":tip_thread_context",
+        ":tip_translation",
         "//base/win32:wide_char",
         "//client:client_interface",
         "//protocol:commands_cc_proto",
@@ -365,6 +366,25 @@ mozc_cc_library(
         "//win32/base:surrogate_pair_observer",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
+        "@com_microsoft_wil//:wil",
+    ],
+)
+
+mozc_cc_library(
+    name = "tip_translation",
+    srcs = ["tip_translation.cc"],
+    hdrs = ["tip_translation.h"],
+    tags = MOZC_TAGS.WIN_ONLY,
+    target_compatible_with = ["@platforms//os:windows"],
+    deps = [
+        ":tip_edit_session",
+        ":tip_private_context_h",
+        ":tip_text_service",
+        "//base/win32:wide_char",
+        "//client:client_interface",
+        "//protocol:candidate_window_cc_proto",
+        "//protocol:commands_cc_proto",
+        "//win32/tip/translation",
         "@com_microsoft_wil//:wil",
     ],
 )
@@ -673,6 +693,7 @@ mozc_cc_library(
         ":tip_status",
         ":tip_text_service",
         ":tip_thread_context",
+        ":tip_translation",
         ":tip_ui_element_manager",
         ":tip_ui_handler",
         "//base:system_util",
