@@ -35,6 +35,10 @@ class TipTranslation {
 
   // The text service is going away on this thread.
   static void OnDeactivate();
+
+  // Opens the settings app (API keys, languages, on/off), installed next to
+  // the other Mozc executables.
+  static bool OpenSettings();
 };
 
 }  // namespace tsf

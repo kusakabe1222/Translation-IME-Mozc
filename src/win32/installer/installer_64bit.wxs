@@ -167,6 +167,7 @@
       <ComponentRef Id="GIMEJaCacheService" />
       <ComponentRef Id="GIMEJaRenderer" />
       <ComponentRef Id="GIMEJaTool" />
+      <ComponentRef Id="GIMEJaTranslationSettings" />
       <?if $(var.VSConfigurationName) = "Release" ?>
         <ComponentRef Id="msvcp140" />
         <ComponentRef Id="msvcp140_1" />
@@ -317,6 +318,12 @@
           </Component>
           <Component Id="GIMEJaTool">
             <File Id="GoogleIMEJaTool.exe" Name="GoogleIMEJaTool.exe" DiskId="1" Checksum="yes" Source="$(var.MozcToolPath)" Vital="yes" />
+          </Component>
+          <!-- Translation IME settings (API keys, target languages, on/off). -->
+          <Component Id="GIMEJaTranslationSettings">
+            <File Id="GoogleIMEJaTranslationSettings.exe" Name="GoogleIMEJaTranslationSettings.exe" DiskId="1" Checksum="yes" Source="$(var.MozcTranslationSettingsPath)" Vital="yes" KeyPath="yes">
+              <Shortcut Id="GIMEJaTranslationSettingsShortcut" Directory="ProgramMenuFolder" Name="Translation IME 設定" Description="翻訳の API キーと翻訳先の言語を設定します" WorkingDirectory="GIMEJaDir" Advertise="no" />
+            </File>
           </Component>
           <?if $(var.VSConfigurationName) = "Release" ?>
             <Component Id="msvcp140">

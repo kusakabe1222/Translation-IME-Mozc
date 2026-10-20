@@ -74,6 +74,7 @@
 #include "win32/tip/tip_resource.h"
 #include "win32/tip/tip_status.h"
 #include "win32/tip/tip_thread_context.h"
+#include "win32/tip/tip_translation.h"
 #include "win32/tip/tip_ui_handler.h"
 
 namespace mozc {
@@ -916,6 +917,8 @@ class TipTextServiceImpl
       case TipLangBarCallback::kWordRegister:
       case TipLangBarCallback::kAbout:
         return SpawnTool(GetMozcToolCommand(menu_id));
+      case TipLangBarCallback::kTranslationSettings:
+        return TipTranslation::OpenSettings() ? S_OK : E_FAIL;
       case TipLangBarCallback::kHelp:
         // Open the about dialog.
         return Process::OpenBrowser(kHelpUrl) ? S_OK : E_FAIL;

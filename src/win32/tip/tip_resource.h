@@ -52,6 +52,7 @@
 #define IDS_OBSERVABLE_SUGGEST_WINDOW 131
 #define IDS_CANDIDATE_WINDOW 132
 #define IDS_INDICATOR_WINDOW 133
+#define IDS_TRANSLATION_SETTINGS 134
 
 // Historically, the TSF version of Mozc used the resource ID 102 for showing
 // IMM32 icon.  For this reason, we keep this ID for the product icon.

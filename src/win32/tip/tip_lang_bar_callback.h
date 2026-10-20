@@ -52,6 +52,7 @@ class TipLangBarCallback : public IUnknown {
     kProperty = 20,
     kDictionary = 21,
     kWordRegister = 22,
+    kTranslationSettings = 23,  // Translation IME settings app
 
     // Help Menu
     kHelp = 30,

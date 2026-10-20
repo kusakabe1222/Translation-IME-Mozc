@@ -217,6 +217,8 @@ HRESULT TipLangBar::InitLangBar(TipLangBarCallback* text_service) {
          IDS_WORD_REGISTER, IDI_DICTIONARY_NT, IDI_DICTIONARY},
         {kTipLangBarItemTypeDefault, TipLangBarCallback::kProperty,
          IDS_PROPERTY, IDI_PROPERTY_NT, IDI_PROPERTY},
+        {kTipLangBarItemTypeDefault, TipLangBarCallback::kTranslationSettings,
+         IDS_TRANSLATION_SETTINGS, IDI_PROPERTY_NT, IDI_PROPERTY},
         {kTipLangBarItemTypeSeparator, 0, 0, 0, 0},
         {kTipLangBarItemTypeDefault, TipLangBarCallback::kAbout, IDS_ABOUT, 0,
          0},
@@ -251,6 +253,8 @@ HRESULT TipLangBar::InitLangBar(TipLangBarCallback* text_service) {
          IDI_DICTIONARY},  // Use Dictionary icon temporarily
         {kTipLangBarItemTypeDefault, TipLangBarCallback::kProperty,
          IDS_PROPERTY, IDI_PROPERTY_NT, IDI_PROPERTY},
+        {kTipLangBarItemTypeDefault, TipLangBarCallback::kTranslationSettings,
+         IDS_TRANSLATION_SETTINGS, IDI_PROPERTY_NT, IDI_PROPERTY},
         {kTipLangBarItemTypeSeparator, 0, 0, 0, 0},
         {kTipLangBarItemTypeDefault, TipLangBarCallback::kCancel, IDS_CANCEL, 0,
          0},

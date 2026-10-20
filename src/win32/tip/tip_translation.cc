@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/process.h"
 #include "base/win32/wide_char.h"
 #include "client/client_interface.h"
 #include "protocol/candidate_window.pb.h"
@@ -35,10 +36,16 @@ using ::mozc::commands::Output;
 using ::mozc::commands::Result;
 using ::mozc::commands::SessionCommand;
 
+#if defined(GOOGLE_JAPANESE_INPUT_BUILD)
+constexpr char kSettingsExecutable[] = "GoogleIMEJaTranslationSettings.exe";
+#else
+constexpr char kSettingsExecutable[] = "mozc_translation_settings.exe";
+#endif
+
 constexpr wchar_t kWindowClassName[] = L"MozcTranslationIME.Results";
 constexpr UINT kResultsMessage = WM_APP + 0x51;
 constexpr wchar_t kNoApiKeyMessage[] =
-    L"APIキーが未設定です (Translation IME 設定で設定してください)";
+    L"APIキーが未設定です (IME アイコンを右クリック →「翻訳の設定」)";
 constexpr wchar_t kLoadingMessage[] = L"翻訳しています…";
 
 // State of the translation UI on this thread (one text service per thread).
@@ -602,6 +609,10 @@ void TipTranslation::OnDeactivate() {
     ::DestroyWindow(state->window);
   }
   delete state;
+}
+
+bool TipTranslation::OpenSettings() {
+  return Process::SpawnMozcProcess(kSettingsExecutable, "");
 }
 
 }  // namespace tsf

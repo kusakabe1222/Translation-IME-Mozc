@@ -2,12 +2,14 @@
 #
 # These sources are shared with the original Translation IME (TSF, SampleIME based):
 #   HttpTranslator     WinHTTP requests, asynchronous jobs and the result mailbox
-#   TranslationConfig  settings in HKCU\Software\TranslationIME (written by the settings app)
+#   TranslationConfig  settings in HKCU\Software\TranslationIME (written by
+#                      //win32/translation_settings)
 #   KeyProtection      API key encryption (AES-256-GCM, data key in the TPM + DPAPI)
 #   Json               minimal JSON parser for the API responses
 #   TranslationCache   recent translations
 #
-# System libraries (winhttp, bcrypt, ncrypt, crypt32) are linked through #pragma comment.
+# System libraries (winhttp, bcrypt, ncrypt, crypt32) are linked through #pragma comment;
+# advapi32 (registry) through linkopts.
 
 load(
     "//:build_defs.bzl",
@@ -32,6 +34,11 @@ mozc_cc_library(
         "TranslationCache.h",
         "TranslationConfig.h",
     ],
+    linkopts = ["advapi32.lib"],
     tags = MOZC_TAGS.WIN_ONLY,
     target_compatible_with = ["@platforms//os:windows"],
+    visibility = [
+        "//win32/tip:__subpackages__",
+        "//win32/translation_settings:__pkg__",
+    ],
 )
