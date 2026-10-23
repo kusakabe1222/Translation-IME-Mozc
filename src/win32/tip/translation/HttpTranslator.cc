@@ -284,6 +284,7 @@ struct AsyncJob
     std::wstring sourceLanguage;
     UINT requestId = 0;
     std::shared_ptr<CTranslationMailbox> mailbox;
+    bool progressive = false;
     HMODULE module = nullptr;
 };
 
@@ -295,8 +296,22 @@ DWORD WINAPI TranslationThreadProc(LPVOID param)
         module = job->module;
         try
         {
+            std::function<void(const TranslationItem&)> onItem;
+            if (job->progressive)
+            {
+                const AsyncJob* early = job.get();
+                onItem = [early](const TranslationItem& item) {
+                    std::unique_ptr<TranslationResult> partial(new TranslationResult());
+                    partial->requestId = early->requestId;
+                    partial->sourceText = early->text;
+                    partial->sourceLanguage = early->sourceLanguage;
+                    partial->items.push_back(item);
+                    partial->complete = false;
+                    early->mailbox->Post(std::move(partial));
+                };
+            }
             std::unique_ptr<TranslationResult> result(new TranslationResult(
-                HttpTranslator::Translate(job->config, job->text, job->sourceLanguage)));
+                HttpTranslator::Translate(job->config, job->text, job->sourceLanguage, onItem)));
             result->requestId = job->requestId;
             job->mailbox->Post(std::move(result));
         }
@@ -670,7 +685,8 @@ bool GetDeepLUsage(const TranslationConfig& config, DeepLUsage* usage, std::wstr
     return true;
 }
 
-TranslationResult Translate(const TranslationConfig& config, const std::wstring& text, const std::wstring& sourceLanguage)
+TranslationResult Translate(const TranslationConfig& config, const std::wstring& text, const std::wstring& sourceLanguage,
+                            const std::function<void(const TranslationItem&)>& onItem)
 {
     TranslationResult result;
     result.sourceText = text;
@@ -711,8 +727,19 @@ TranslationResult Translate(const TranslationConfig& config, const std::wstring&
     std::vector<std::thread> workers;
     for (size_t i = 0; i < count; i++)
     {
-        auto work = [&result, &config, &text, &sourceLanguage, session, i]() {
+        auto work = [&result, &config, &text, &sourceLanguage, &onItem, session, i]() {
             result.items[i] = TranslateOne(session, config, text, config.targetLanguages[i], sourceLanguage);
+            if (onItem)
+            {
+                try
+                {
+                    onItem(result.items[i]);
+                }
+                catch (...)
+                {
+                    // An early result is only a preview: the complete result still follows.
+                }
+            }
         };
         try
         {
@@ -733,7 +760,7 @@ TranslationResult Translate(const TranslationConfig& config, const std::wstring&
 }
 
 bool TranslateAsync(const TranslationConfig& config, const std::wstring& text, const std::wstring& sourceLanguage,
-                    UINT requestId, const std::shared_ptr<CTranslationMailbox>& mailbox)
+                    UINT requestId, const std::shared_ptr<CTranslationMailbox>& mailbox, bool progressive)
 {
     if (!mailbox)
     {
@@ -756,6 +783,7 @@ bool TranslateAsync(const TranslationConfig& config, const std::wstring& text, c
     job->sourceLanguage = sourceLanguage;
     job->requestId = requestId;
     job->mailbox = mailbox;
+    job->progressive = progressive;
 
     // Keep this module loaded while the worker runs, even if TSF releases the IME meanwhile.
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,

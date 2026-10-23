@@ -7,6 +7,7 @@
 #pragma once
 
 #include <windows.h>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -30,6 +31,9 @@ struct TranslationResult
     std::wstring sourceLanguage;    // as requested; empty = auto-detect
     std::vector<TranslationItem> items;
     std::wstring error;     // set when the request could not be made at all
+    // false: an early result with only the one language that has just arrived
+    // (TranslateAsync with progressive); the complete result follows.
+    bool complete = true;
 
     bool AllSucceeded() const;
     bool AnySucceeded() const;
@@ -70,13 +74,17 @@ namespace HttpTranslator
 
     // Blocking. Translates text into every language in config.targetLanguages, in parallel.
     // sourceLanguage empty = let the service detect it. Never call this on a UI thread.
+    // onItem, if set, is called (on a worker thread) as soon as each language is done.
     TranslationResult Translate(const TranslationConfig& config, const std::wstring& text,
-                                const std::wstring& sourceLanguage = Japanese);
+                                const std::wstring& sourceLanguage = Japanese,
+                                const std::function<void(const TranslationItem&)>& onItem = nullptr);
 
     // Runs Translate() on a worker thread and posts the result to mailbox.
+    // With progressive, each language is also posted as it arrives (complete = false).
     // Returns false if the work could not be started.
     bool TranslateAsync(const TranslationConfig& config, const std::wstring& text, const std::wstring& sourceLanguage,
-                        UINT requestId, const std::shared_ptr<CTranslationMailbox>& mailbox);
+                        UINT requestId, const std::shared_ptr<CTranslationMailbox>& mailbox,
+                        bool progressive = false);
 
     // Blocking. Characters used / allowed in the current DeepL billing period.
     bool GetDeepLUsage(const TranslationConfig& config, DeepLUsage* usage, std::wstring* error);

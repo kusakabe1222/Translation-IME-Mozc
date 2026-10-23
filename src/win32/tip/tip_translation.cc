@@ -3,6 +3,7 @@
 
 #include "win32/tip/tip_translation.h"
 
+#include <InputScope.h>
 #include <msctf.h>
 #include <wil/com.h>
 #include <windows.h>
@@ -14,12 +15,15 @@
 #include <vector>
 
 #include "base/process.h"
+#include "base/win32/com.h"
 #include "base/win32/wide_char.h"
 #include "client/client_interface.h"
 #include "protocol/candidate_window.pb.h"
 #include "protocol/commands.pb.h"
+#include "win32/tip/tip_dll_module.h"
 #include "win32/tip/tip_edit_session.h"
 #include "win32/tip/tip_private_context.h"
+#include "win32/tip/tip_range_util.h"
 #include "win32/tip/tip_surrounding_text.h"
 #include "win32/tip/tip_text_service.h"
 #include "win32/tip/translation/HttpTranslator.h"
@@ -62,9 +66,11 @@ struct State {
   std::wstring engine;
   std::wstring key;      // cache key of the shown translations
   std::vector<TranslationItem> items;   // successful translations
+  std::vector<std::wstring> languages;  // requested languages, in display order
   std::wstring message;  // status or error when there are no items
   std::wstring note;     // languages that failed
   int selected = 0;
+  bool moved = false;  // the user moved the selection (it then follows its language)
   UINT request_id = 0;
   std::wstring pending_key;  // cache key of the request in flight
   HWND window = nullptr;
@@ -151,13 +157,65 @@ void EndTranslation(State* state) {
   state->loading = false;
   state->context.reset();
   state->items.clear();
+  state->languages.clear();
   state->message.clear();
   state->note.clear();
   state->selected = 0;
+  state->moved = false;
+}
+
+// While items are added, a selection the user moved stays on its language;
+// otherwise the first item stays selected.
+std::wstring SelectedLanguage(const State* state) {
+  return state->moved && state->selected < static_cast<int>(state->items.size())
+             ? state->items[state->selected].language
+             : std::wstring();
+}
+
+void SelectLanguage(State* state, const std::wstring& language) {
+  state->selected = 0;
+  for (size_t i = 0; !language.empty() && i < state->items.size(); ++i) {
+    if (state->items[i].language == language) {
+      state->selected = static_cast<int>(i);
+    }
+  }
+}
+
+size_t LanguageRank(const State* state, const std::wstring& language) {
+  for (size_t i = 0; i < state->languages.size(); ++i) {
+    if (state->languages[i] == language) {
+      return i;
+    }
+  }
+  return state->languages.size();
+}
+
+// An early result: shows the languages that have arrived while the rest load.
+void AddEarlyItems(State* state, const std::vector<TranslationItem>& items) {
+  const std::wstring selected = SelectedLanguage(state);
+  for (const TranslationItem& item : items) {
+    if (!item.succeeded) {
+      continue;   // reported with the complete result
+    }
+    auto position = state->items.begin();
+    while (position != state->items.end() &&
+           LanguageRank(state, position->language) <= LanguageRank(state, item.language)) {
+      ++position;
+    }
+    state->items.insert(position, item);
+  }
+  SelectLanguage(state, selected);
+  if (!state->items.empty()) {
+    state->message.clear();
+    state->note = std::wstring(kLoadingMessage) + L" (" +
+                  std::to_wstring(state->items.size()) + L"/" +
+                  std::to_wstring(state->languages.size()) + L")";
+  }
 }
 
 void ShowItems(State* state, const std::vector<TranslationItem>& items,
                const std::wstring& error) {
+  const std::wstring selected = SelectedLanguage(state);
   state->loading = false;
   state->items.clear();
   std::wstring failed;
@@ -174,9 +232,7 @@ void ShowItems(State* state, const std::vector<TranslationItem>& items,
   if (state->items.empty()) {
     state->message = error.empty() ? L"翻訳に失敗しました" : error;
   }
-  if (state->selected >= static_cast<int>(state->items.size())) {
-    state->selected = 0;
-  }
+  SelectLanguage(state, selected);
 }
 
 void OnResults(State* state) {
@@ -184,6 +240,13 @@ void OnResults(State* state) {
     return;
   }
   for (std::unique_ptr<TranslationResult>& result : state->mailbox->TakeAll()) {
+    if (!result->complete) {
+      if (state->active && state->loading && result->requestId == state->request_id) {
+        AddEarlyItems(state, result->items);
+        ShowOverlay(state);
+      }
+      continue;
+    }
     // Only complete results are cached, so a failed language is retried.
     TranslationConfig config = TranslationConfig::Load();
     const std::wstring key = CTranslationCache::MakeKey(
@@ -242,6 +305,66 @@ bool EnsureWindow(State* state) {
   return true;
 }
 
+// Password and PIN fields: their text must never reach a translation API.
+bool IsSecureInputScope(InputScope scope) {
+  switch (scope) {
+    case IS_PASSWORD:
+    case IS_NUMERIC_PASSWORD:
+    case IS_NUMERIC_PIN:
+    case IS_ALPHANUMERIC_PIN:
+    case IS_ALPHANUMERIC_PIN_SET:
+      return true;
+    default:
+      return false;
+  }
+}
+
+class SecureFieldReader final : public TipComImplements<ITfEditSession> {
+ public:
+  explicit SecureFieldReader(wil::com_ptr_nothrow<ITfContext> context)
+      : context_(std::move(context)) {}
+
+  bool secure() const { return secure_; }
+
+ private:
+  STDMETHODIMP DoEditSession(TfEditCookie read_cookie) override {
+    wil::com_ptr_nothrow<ITfRange> range;
+    HRESULT result = TipRangeUtil::GetDefaultSelection(context_.get(),
+                                                       read_cookie, &range, nullptr);
+    if (FAILED(result)) {
+      return result;
+    }
+    std::vector<InputScope> input_scopes;
+    result = TipRangeUtil::GetInputScopes(range.get(), read_cookie, &input_scopes);
+    if (FAILED(result)) {
+      return result;
+    }
+    for (const InputScope scope : input_scopes) {
+      secure_ = secure_ || IsSecureInputScope(scope);
+    }
+    return S_OK;
+  }
+
+  wil::com_ptr_nothrow<ITfContext> context_;
+  bool secure_ = false;
+};
+
+// True when the focused field is a password or PIN field. Mozc starts such
+// fields in direct input, but Hankaku/Zenkaku still turns kana input on there.
+// (Win32 ES_PASSWORD edits get no IME input at all.)
+bool IsSecureField(TipTextService* text_service, ITfContext* context) {
+  auto reader = MakeComPtr<SecureFieldReader>(context);
+  HRESULT edit_session_result = S_OK;
+  if (!reader ||
+      FAILED(context->RequestEditSession(text_service->GetClientID(),
+                                         reader.get(), TF_ES_SYNC | TF_ES_READ,
+                                         &edit_session_result)) ||
+      FAILED(edit_session_result)) {
+    return false;
+  }
+  return reader->secure();
+}
+
 bool IsComposing(TipTextService* text_service, ITfContext* context) {
   TipPrivateContext* private_context = text_service->GetPrivateContext(context);
   return private_context != nullptr &&
@@ -284,6 +407,7 @@ void BeginTranslation(TipTextService* text_service, ITfContext* context,
   if (!japanese) {
     config.targetLanguages.assign(1, HttpTranslator::Japanese);
   }
+  state->languages = config.targetLanguages;
 
   state->key = CTranslationCache::MakeKey(config, state->source_language, source);
   std::vector<TranslationItem> cached;
@@ -300,7 +424,8 @@ void BeginTranslation(TipTextService* text_service, ITfContext* context,
     state->request_id++;
     if (EnsureWindow(state) &&
         HttpTranslator::TranslateAsync(config, source, state->source_language,
-                                       state->request_id, state->mailbox)) {
+                                       state->request_id, state->mailbox,
+                                       /*progressive=*/true)) {
       state->pending_key = state->key;
     } else {
       state->loading = false;
@@ -391,7 +516,8 @@ Action Decide(TipTextService* text_service, ITfContext* context,
       if (shown) {
         return Action::kToggle;   // back to the conversion
       }
-      if (IsComposing(text_service, context) && TranslationConfig::Load().enabled) {
+      if (IsComposing(text_service, context) && TranslationConfig::Load().enabled &&
+          !IsSecureField(text_service, context)) {
         return Action::kToggle;
       }
     }
@@ -402,7 +528,7 @@ Action Decide(TipTextService* text_service, ITfContext* context,
     // Shift+Henkan translates the selection (Henkan alone is Mozc's reconversion).
     if (vk == VK_CONVERT && IsDown(VK_SHIFT) && !IsDown(VK_CONTROL) &&
         !IsDown(VK_MENU) && !IsComposing(text_service, context) &&
-        TranslationConfig::Load().enabled) {
+        TranslationConfig::Load().enabled && !IsSecureField(text_service, context)) {
       state->pending_selection = SelectedText(text_service, context);
       if (!state->pending_selection.empty()) {
         return Action::kTranslateSelection;
@@ -525,12 +651,14 @@ bool TipTranslation::OnKey(TipTextService* text_service, ITfContext* context,
     case Action::kNext:
       if (count > 0) {
         state->selected = (state->selected + 1) % count;
+        state->moved = true;
         ShowOverlay(state);
       }
       break;
     case Action::kPrevious:
       if (count > 0) {
         state->selected = (state->selected + count - 1) % count;
+        state->moved = true;
         ShowOverlay(state);
       }
       break;
