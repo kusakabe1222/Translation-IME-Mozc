@@ -2,6 +2,8 @@
 
 #include "TranslationConfig.h"
 
+#include "UiText.h"
+
 #include <atomic>
 #include <cwctype>
 
@@ -412,26 +414,31 @@ std::wstring TranslationConfig::JoinLanguageList(const std::vector<std::wstring>
     return text;
 }
 
+const wchar_t* LanguageInfo::DisplayName() const
+{
+    return UiText::Pick(name, englishName);
+}
+
 const std::vector<LanguageInfo>& TranslationConfig::SupportedLanguages()
 {
     static const std::vector<LanguageInfo> languages = {
-        { L"EN", L"英語" },
-        { L"ZH", L"中国語 (簡体字)" },
-        { L"ZH-TW", L"中国語 (繁体字)" },
-        { L"KO", L"韓国語" },
-        { L"FR", L"フランス語" },
-        { L"ES", L"スペイン語" },
-        { L"DE", L"ドイツ語" },
-        { L"IT", L"イタリア語" },
-        { L"PT", L"ポルトガル語" },
-        { L"RU", L"ロシア語" },
-        { L"ID", L"インドネシア語" },
-        { L"NL", L"オランダ語" },
-        { L"PL", L"ポーランド語" },
-        { L"TR", L"トルコ語" },
-        { L"UK", L"ウクライナ語" },
-        { L"SV", L"スウェーデン語" },
-        { L"AR", L"アラビア語" },
+        { L"EN", L"英語", L"English" },
+        { L"ZH", L"中国語 (簡体字)", L"Chinese (Simp.)" },
+        { L"ZH-TW", L"中国語 (繁体字)", L"Chinese (Trad.)" },
+        { L"KO", L"韓国語", L"Korean" },
+        { L"FR", L"フランス語", L"French" },
+        { L"ES", L"スペイン語", L"Spanish" },
+        { L"DE", L"ドイツ語", L"German" },
+        { L"IT", L"イタリア語", L"Italian" },
+        { L"PT", L"ポルトガル語", L"Portuguese" },
+        { L"RU", L"ロシア語", L"Russian" },
+        { L"ID", L"インドネシア語", L"Indonesian" },
+        { L"NL", L"オランダ語", L"Dutch" },
+        { L"PL", L"ポーランド語", L"Polish" },
+        { L"TR", L"トルコ語", L"Turkish" },
+        { L"UK", L"ウクライナ語", L"Ukrainian" },
+        { L"SV", L"スウェーデン語", L"Swedish" },
+        { L"AR", L"アラビア語", L"Arabic" },
     };
     return languages;
 }
@@ -440,13 +447,13 @@ std::wstring TranslationConfig::LanguageName(const std::wstring& code)
 {
     if (_wcsicmp(code.c_str(), L"JA") == 0)
     {
-        return L"日本語";
+        return UiText::Pick(L"日本語", L"Japanese");
     }
     for (const LanguageInfo& language : SupportedLanguages())
     {
         if (_wcsicmp(code.c_str(), language.code) == 0)
         {
-            return language.name;
+            return language.DisplayName();
         }
     }
     return code;

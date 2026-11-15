@@ -16,6 +16,7 @@
 
 #include "win32/tip/translation/HttpTranslator.h"
 #include "win32/tip/translation/TranslationConfig.h"
+#include "win32/tip/translation/UiText.h"
 #include "win32/translation_settings/translation_settings_resource.h"
 
 #pragma comment(lib, "comctl32.lib")
@@ -26,7 +27,10 @@ const UINT WM_APP_TEST_RESULT = WM_APP + 1;
 const UINT WM_APP_USAGE = WM_APP + 2;
 const UINT WM_APP_REFRESH_FONTS = WM_APP + 3;
 
-const wchar_t kWindowTitle[] = L"Translation IME 設定";
+const wchar_t* WindowTitle()
+{
+    return UiText::Pick(L"Translation IME 設定", L"Translation IME Settings");
+}
 const wchar_t kTestText[] = L"こんにちは";
 const WCHAR kPasswordChar = 0x2022;   // •
 
@@ -176,7 +180,7 @@ void CreateLanguageCheckBoxes(HWND dialog)
                     kLanguageLeft + column * kLanguageColumnWidth + kLanguageColumnWidth - 2, kLanguageTop + row * kLanguageRowHeight + 10 };
         MapDialogRect(dialog, &rc);
 
-        HWND checkBox = CreateWindowExW(0, L"BUTTON", languages[i].name,
+        HWND checkBox = CreateWindowExW(0, L"BUTTON", languages[i].DisplayName(),
                                         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
                                         rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, dialog,
                                         reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LANGUAGE_FIRST + i)),
@@ -212,11 +216,11 @@ void LoadIntoDialog(HWND dialog)
     SendDlgItemMessageW(dialog, IDC_TIMEOUT_SPIN, UDM_SETPOS32, 0, static_cast<LPARAM>(config.timeoutMs / 1000));
     CheckDlgButton(dialog, IDC_ENABLED, config.enabled ? BST_CHECKED : BST_UNCHECKED);
 
-    const wchar_t* protection = L"キーは保存時に AES-256-GCM で暗号化されます";
+    const wchar_t* protection = UiText::Pick(L"キーは保存時に AES-256-GCM で暗号化されます", L"Keys are encrypted with AES-256-GCM when saved");
     switch (config.keyProtection)
     {
-    case KeyProtection::Protection::Tpm:   protection = L"キーの保護: AES-256-GCM + TPM + DPAPI"; break;
-    case KeyProtection::Protection::Dpapi: protection = L"キーの保護: AES-256-GCM + DPAPI (TPM なし)"; break;
+    case KeyProtection::Protection::Tpm:   protection = UiText::Pick(L"キーの保護: AES-256-GCM + TPM + DPAPI", L"Key protection: AES-256-GCM + TPM + DPAPI"); break;
+    case KeyProtection::Protection::Dpapi: protection = UiText::Pick(L"キーの保護: AES-256-GCM + DPAPI (TPM なし)", L"Key protection: AES-256-GCM + DPAPI (no TPM)"); break;
     default: break;
     }
     SetDlgItemTextW(dialog, IDC_KEY_PROTECTION, protection);
@@ -263,11 +267,11 @@ void StartUsageQuery(HWND dialog)
     if (config.deeplApiKey.empty())
     {
         SendMessageW(bar, PBM_SETPOS, 0, 0);
-        SetDlgItemTextW(dialog, IDC_USAGE_TEXT, L"DeepL キー未設定");
+        SetDlgItemTextW(dialog, IDC_USAGE_TEXT, UiText::Pick(L"DeepL キー未設定", L"No DeepL key"));
         return;
     }
 
-    SetDlgItemTextW(dialog, IDC_USAGE_TEXT, L"取得中…");
+    SetDlgItemTextW(dialog, IDC_USAGE_TEXT, UiText::Pick(L"取得中…", L"Loading…"));
     std::thread([dialog, config]() {
         std::unique_ptr<UsageOutcome> outcome(new UsageOutcome());
         outcome->succeeded = HttpTranslator::GetDeepLUsage(config, &outcome->usage, &outcome->error);
@@ -283,7 +287,7 @@ void StartConnectionTest(HWND dialog)
     TranslationConfig config = ConfigFromDialog(dialog);
     if (config.engine == TranslationEngine::None)
     {
-        SetTestResult(dialog, L"API キーを入力してください", kError);
+        SetTestResult(dialog, UiText::Pick(L"API キーを入力してください", L"Enter an API key"), kError);
         return;
     }
 
@@ -291,7 +295,10 @@ void StartConnectionTest(HWND dialog)
     config.targetLanguages.assign(1, target);
 
     EnableWindow(GetDlgItem(dialog, IDC_TEST), FALSE);
-    SetTestResult(dialog, std::wstring(config.EngineName()) + L" に接続しています…", kMuted);
+    SetTestResult(dialog,
+                  UiText::IsJapanese() ? std::wstring(config.EngineName()) + L" に接続しています…"
+                                       : L"Connecting to " + std::wstring(config.EngineName()) + L"…",
+                  kMuted);
 
     std::thread([dialog, config]() {
         std::unique_ptr<TestOutcome> outcome(new TestOutcome());
@@ -299,7 +306,9 @@ void StartConnectionTest(HWND dialog)
         if (result.AnySucceeded())
         {
             outcome->succeeded = true;
-            outcome->message = L"✓ " + std::wstring(config.EngineName()) + L" に接続できました: 「" + kTestText + L"」→ " + result.items.front().text;
+            outcome->message = UiText::IsJapanese()
+                ? L"✓ " + std::wstring(config.EngineName()) + L" に接続できました: 「" + kTestText + L"」→ " + result.items.front().text
+                : L"✓ Connected to " + std::wstring(config.EngineName()) + L": “" + kTestText + L"” → " + result.items.front().text;
         }
         else
         {
@@ -319,7 +328,7 @@ void TogglePasswordVisibility(HWND dialog, int buttonId, int editId)
     bool show = IsDlgButtonChecked(dialog, buttonId) == BST_CHECKED;
     HWND edit = GetDlgItem(dialog, editId);
     SendMessageW(edit, EM_SETPASSWORDCHAR, show ? 0 : kPasswordChar, 0);
-    SetDlgItemTextW(dialog, buttonId, show ? L"隠す" : L"表示");
+    SetDlgItemTextW(dialog, buttonId, show ? UiText::Pick(L"隠す", L"Hide") : UiText::Pick(L"表示", L"Show"));
     InvalidateRect(edit, nullptr, TRUE);
 }
 
@@ -348,7 +357,7 @@ void PaintChrome(HWND dialog, HDC dc)
     RECT subtitle = { x, title.bottom, header.right - margin.left, header.bottom };
     SelectObject(dc, g_state.subtitleFont);
     SetTextColor(dc, RGB(0xDD, 0xEB, 0xF8));
-    DrawTextW(dc, L"入力した日本語を、その場で翻訳", -1, &subtitle, DT_SINGLELINE | DT_TOP | DT_NOPREFIX);
+    DrawTextW(dc, UiText::Pick(L"入力した日本語を、その場で翻訳", L"Translate Japanese right where you type"), -1, &subtitle, DT_SINGLELINE | DT_TOP | DT_NOPREFIX);
     SelectObject(dc, oldFont);
 
     // Footer band behind the buttons.
@@ -372,9 +381,11 @@ INT_PTR CALLBACK DialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lPa
             CreateLanguageCheckBoxes(dialog);
 
             SendDlgItemMessageW(dialog, IDC_USAGE_BAR, PBM_SETRANGE32, 0, 1000);
-            SetDlgItemTextW(dialog, IDC_USAGE_HELP,
-                            L"変換中に Shift で翻訳 ・ 文字を選択して Shift+変換 で選択範囲を翻訳\n"
-                            L"タスクバーの IME アイコンを右クリック →「翻訳の設定」でいつでも開けます");
+            SetDlgItemTextW(dialog, IDC_USAGE_HELP, UiText::Pick(
+                L"変換中に Shift で翻訳 ・ 文字を選択して Shift+変換 で選択範囲を翻訳\n"
+                L"タスクバーの IME アイコンを右クリック →「翻訳の設定」でいつでも開けます",
+                L"Shift while converting translates  ·  select text and press Shift+Henkan to translate it\n"
+                L"Right-click the IME icon in the taskbar → \"Translation Settings\" to open this window"));
             SendDlgItemMessageW(dialog, IDC_DEEPL_KEY, EM_SETPASSWORDCHAR, kPasswordChar, 0);
             SendDlgItemMessageW(dialog, IDC_GOOGLE_KEY, EM_SETPASSWORDCHAR, kPasswordChar, 0);
             SendDlgItemMessageW(dialog, IDC_DEEPL_KEY, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"xxxxxxxx-...:fx"));
@@ -462,12 +473,12 @@ INT_PTR CALLBACK DialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lPa
                 TranslationConfig config = ConfigFromDialog(dialog);
                 if (config.targetLanguages.empty())
                 {
-                    MessageBoxW(dialog, L"翻訳先の言語を 1 つ以上選んでください。", kWindowTitle, MB_ICONINFORMATION);
+                    MessageBoxW(dialog, UiText::Pick(L"翻訳先の言語を 1 つ以上選んでください。", L"Choose at least one target language."), WindowTitle(), MB_ICONINFORMATION);
                     return TRUE;
                 }
                 if (!TranslationConfig::Save(config))
                 {
-                    MessageBoxW(dialog, L"設定を保存できませんでした。", kWindowTitle, MB_ICONERROR);
+                    MessageBoxW(dialog, UiText::Pick(L"設定を保存できませんでした。", L"The settings could not be saved."), WindowTitle(), MB_ICONERROR);
                     return TRUE;
                 }
                 EndDialog(dialog, IDOK);
@@ -494,7 +505,7 @@ INT_PTR CALLBACK DialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lPa
             if (!outcome->succeeded)
             {
                 SendMessageW(bar, PBM_SETPOS, 0, 0);
-                SetDlgItemTextW(dialog, IDC_USAGE_TEXT, L"取得できません");
+                SetDlgItemTextW(dialog, IDC_USAGE_TEXT, UiText::Pick(L"取得できません", L"Unavailable"));
                 return TRUE;
             }
 
@@ -504,7 +515,7 @@ INT_PTR CALLBACK DialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lPa
                 : 0;
             SendMessageW(bar, PBM_SETSTATE, (permille >= 900) ? PBST_ERROR : (permille >= 750) ? PBST_PAUSED : PBST_NORMAL, 0);
             SendMessageW(bar, PBM_SETPOS, permille, 0);
-            std::wstring text = FormatCount(usage.characterCount) + L" / " + FormatCount(usage.characterLimit) + L" 字";
+            std::wstring text = FormatCount(usage.characterCount) + L" / " + FormatCount(usage.characterLimit) + UiText::Pick(L" 字", L" chars");
             SetDlgItemTextW(dialog, IDC_USAGE_TEXT, text.c_str());
         }
         return TRUE;
@@ -527,7 +538,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR c
     HANDLE mutex = CreateMutexW(nullptr, TRUE, L"TranslationIME.Settings");
     if (mutex && GetLastError() == ERROR_ALREADY_EXISTS)
     {
-        HWND existing = FindWindowW(L"#32770", kWindowTitle);
+        HWND existing = FindWindowW(L"#32770", WindowTitle());
         if (existing)
         {
             ShowWindow(existing, SW_RESTORE);
@@ -540,6 +551,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ LPWSTR c
     // Keys saved by older versions (plain text, DPAPI only) are re-encrypted the first time the
     // settings open. Creating the TPM key the first time takes about half a second.
     TranslationConfig::ProtectLegacyKeys();
+
+    // The dialog resource (Japanese or English) follows the same language as the texts.
+    SetThreadUILanguage(UiText::IsJapanese() ? MAKELANGID(LANG_JAPANESE, SUBLANG_DEFAULT)
+                                             : MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US));
 
     INITCOMMONCONTROLSEX controls = { sizeof(controls), ICC_STANDARD_CLASSES | ICC_PROGRESS_CLASS | ICC_UPDOWN_CLASS };
     InitCommonControlsEx(&controls);

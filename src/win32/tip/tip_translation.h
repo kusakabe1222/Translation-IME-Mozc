@@ -36,6 +36,15 @@ class TipTranslation {
   // The text service is going away on this thread.
   static void OnDeactivate();
 
+  // An application drawing the candidates itself (the candidate list UI
+  // element) selected or finalized a candidate. They return true when the
+  // translations are shown in |context|, the call then being theirs. Finalize
+  // commits the selected translation; |commit| false (Abort) goes back.
+  static bool OnUiElementSelect(TipTextService* text_service,
+                                ITfContext* context, UINT index);
+  static bool OnUiElementFinalize(TipTextService* text_service,
+                                  ITfContext* context, bool commit);
+
   // Opens the settings app (API keys, languages, on/off), installed next to
   // the other Mozc executables.
   static bool OpenSettings();

@@ -384,6 +384,7 @@ mozc_cc_library(
         ":tip_range_util",
         ":tip_surrounding_text",
         ":tip_text_service",
+        ":tip_translation_logic",
         "//base:process",
         "//base/win32:com",
         "//base/win32:wide_char",
@@ -392,6 +393,30 @@ mozc_cc_library(
         "//protocol:commands_cc_proto",
         "//win32/tip/translation",
         "@com_microsoft_wil//:wil",
+    ],
+)
+
+mozc_cc_library(
+    name = "tip_translation_logic",
+    srcs = ["tip_translation_logic.cc"],
+    hdrs = ["tip_translation_logic.h"],
+    tags = MOZC_TAGS.WIN_ONLY,
+    target_compatible_with = ["@platforms//os:windows"],
+    deps = [
+        "//win32/tip/translation",
+    ],
+)
+
+mozc_cc_test(
+    name = "tip_translation_logic_test",
+    size = "small",
+    srcs = ["tip_translation_logic_test.cc"],
+    tags = MOZC_TAGS.WIN_ONLY,
+    target_compatible_with = ["@platforms//os:windows"],
+    deps = [
+        ":tip_translation_logic",
+        "//testing:gunit_main",
+        "//win32/tip/translation",
     ],
 )
 
@@ -590,6 +615,7 @@ mozc_cc_library(
         ":tip_private_context_h",
         ":tip_resource",
         ":tip_text_service",
+        ":tip_translation",
         "//base/win32:com",
         "//base/win32:wide_char",
         "//protocol:candidate_window_cc_proto",

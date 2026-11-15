@@ -7,8 +7,13 @@
 #include <msctf.h>
 #include <wil/com.h>
 #include <windows.h>
+#include <richedit.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cstdarg>
+#include <cstdio>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <utility>
@@ -26,9 +31,11 @@
 #include "win32/tip/tip_range_util.h"
 #include "win32/tip/tip_surrounding_text.h"
 #include "win32/tip/tip_text_service.h"
+#include "win32/tip/tip_translation_logic.h"
 #include "win32/tip/translation/HttpTranslator.h"
 #include "win32/tip/translation/TranslationCache.h"
 #include "win32/tip/translation/TranslationConfig.h"
+#include "win32/tip/translation/UiText.h"
 
 namespace mozc {
 namespace win32 {
@@ -48,9 +55,18 @@ constexpr char kSettingsExecutable[] = "mozc_translation_settings.exe";
 
 constexpr wchar_t kWindowClassName[] = L"MozcTranslationIME.Results";
 constexpr UINT kResultsMessage = WM_APP + 0x51;
-constexpr wchar_t kNoApiKeyMessage[] =
-    L"APIキーが未設定です (IME アイコンを右クリック →「翻訳の設定」)";
-constexpr wchar_t kLoadingMessage[] = L"翻訳しています…";
+const wchar_t* NoApiKeyMessage() {
+  return UiText::Pick(
+      L"APIキーが未設定です (IME アイコンを右クリック →「翻訳の設定」)",
+      L"No API key is set (right-click the IME icon → \"Translation Settings\")");
+}
+const wchar_t* LoadingMessage() {
+  return UiText::Pick(L"翻訳しています…", L"Translating…");
+}
+// A candidate shows at most this much of a translation (a whole selected
+// document would make the window taller than the screen); the commit is whole.
+constexpr size_t kPreviewLines = 4;
+constexpr size_t kPreviewWidth = 100;
 
 // State of the translation UI on this thread (one text service per thread).
 struct State {
@@ -61,6 +77,8 @@ struct State {
   bool shift_pending = false;  // Shift is down and nothing else was pressed
   bool selection = false;  // translating the application's selection, not the composition
   std::wstring pending_selection;  // selected text found for Shift+Henkan (Decide)
+  HWND pending_control = nullptr;  // the edit control it was read from, if read directly
+  HWND edit_control = nullptr;     // same, for the selection being translated
   std::wstring source;
   std::wstring source_language;  // "JA", or empty to auto-detect
   std::wstring engine;
@@ -92,7 +110,60 @@ State* GetState() {
   return g_state;
 }
 
+// Diagnostic trace for support, off unless HKCU\Software\TranslationIME has
+// Trace = 1: appends key decisions (key codes and lengths, never text) to
+// %TEMP%\TranslationIME-trace.log of the application's process.
+bool TraceEnabled() {
+  static const bool enabled = [] {
+    DWORD value = 0;
+    DWORD size = sizeof(value);
+    return ::RegGetValueW(HKEY_CURRENT_USER, L"Software\\TranslationIME", L"Trace",
+                          RRF_RT_REG_DWORD, nullptr, &value, &size) == ERROR_SUCCESS &&
+           value != 0;
+  }();
+  return enabled;
+}
+
+void Trace(const char* format, ...) {
+  if (!TraceEnabled()) {
+    return;
+  }
+  char line[512];
+  va_list args;
+  va_start(args, format);
+  const int length = vsnprintf(line, sizeof(line) - 2, format, args);
+  va_end(args);
+  if (length <= 0) {
+    return;
+  }
+  wchar_t path[MAX_PATH + 32] = {};
+  const DWORD dir = ::GetTempPathW(MAX_PATH, path);
+  if (dir == 0 || dir > MAX_PATH) {
+    return;
+  }
+  wcscat_s(path, L"TranslationIME-trace.log");
+  HANDLE file = ::CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    return;
+  }
+  char stamped[600];
+  const int total = snprintf(stamped, sizeof(stamped), "%lu pid=%lu %s\r\n",
+                             ::GetTickCount(), ::GetCurrentProcessId(), line);
+  DWORD written = 0;
+  ::WriteFile(file, stamped, static_cast<DWORD>(std::max(total, 0)), &written, nullptr);
+  ::CloseHandle(file);
+}
+
 bool IsDown(int vk) { return (::GetKeyState(vk) & 0x8000) != 0; }
+
+TranslationModifiers CurrentModifiers() {
+  TranslationModifiers modifiers;
+  modifiers.shift = IsDown(VK_SHIFT);
+  modifiers.control = IsDown(VK_CONTROL);
+  modifiers.alt = IsDown(VK_MENU);
+  return modifiers;
+}
 
 std::wstring PreeditText(const Output& output) {
   std::string text;
@@ -153,6 +224,7 @@ void EndTranslation(State* state) {
   state->original.Clear();
   state->overlay_label.clear();
   state->selection = false;
+  state->edit_control = nullptr;
   state->active = false;
   state->loading = false;
   state->context.reset();
@@ -172,44 +244,16 @@ std::wstring SelectedLanguage(const State* state) {
              : std::wstring();
 }
 
-void SelectLanguage(State* state, const std::wstring& language) {
-  state->selected = 0;
-  for (size_t i = 0; !language.empty() && i < state->items.size(); ++i) {
-    if (state->items[i].language == language) {
-      state->selected = static_cast<int>(i);
-    }
-  }
-}
-
-size_t LanguageRank(const State* state, const std::wstring& language) {
-  for (size_t i = 0; i < state->languages.size(); ++i) {
-    if (state->languages[i] == language) {
-      return i;
-    }
-  }
-  return state->languages.size();
-}
-
 // An early result: shows the languages that have arrived while the rest load.
+// Failed languages are reported with the complete result.
 void AddEarlyItems(State* state, const std::vector<TranslationItem>& items) {
   const std::wstring selected = SelectedLanguage(state);
-  for (const TranslationItem& item : items) {
-    if (!item.succeeded) {
-      continue;   // reported with the complete result
-    }
-    auto position = state->items.begin();
-    while (position != state->items.end() &&
-           LanguageRank(state, position->language) <= LanguageRank(state, item.language)) {
-      ++position;
-    }
-    state->items.insert(position, item);
-  }
-  SelectLanguage(state, selected);
+  InsertInLanguageOrder(state->languages, items, &state->items);
+  state->selected = IndexOfLanguage(state->items, selected);
   if (!state->items.empty()) {
     state->message.clear();
-    state->note = std::wstring(kLoadingMessage) + L" (" +
-                  std::to_wstring(state->items.size()) + L"/" +
-                  std::to_wstring(state->languages.size()) + L")";
+    state->note = LoadingMessage() +
+                  ProgressSuffix(state->items.size(), state->languages.size());
   }
 }
 
@@ -218,21 +262,19 @@ void ShowItems(State* state, const std::vector<TranslationItem>& items,
   const std::wstring selected = SelectedLanguage(state);
   state->loading = false;
   state->items.clear();
-  std::wstring failed;
   for (const TranslationItem& item : items) {
     if (item.succeeded) {
       state->items.push_back(item);
-    } else {
-      failed += (failed.empty() ? L"" : L", ") + item.language;
     }
   }
+  const std::wstring failed = FailedLanguages(items);
   state->note = failed.empty() ? std::wstring()
-                               : L"翻訳できなかった言語: " + failed;
+                               : UiText::Pick(L"翻訳できなかった言語: ", L"Not translated: ") + failed;
   state->message.clear();
   if (state->items.empty()) {
-    state->message = error.empty() ? L"翻訳に失敗しました" : error;
+    state->message = error.empty() ? UiText::Pick(L"翻訳に失敗しました", L"Translation failed") : error;
   }
-  SelectLanguage(state, selected);
+  state->selected = IndexOfLanguage(state->items, selected);
 }
 
 void OnResults(State* state) {
@@ -303,20 +345,6 @@ bool EnsureWindow(State* state) {
   state->mailbox =
       std::make_shared<CTranslationMailbox>(state->window, kResultsMessage);
   return true;
-}
-
-// Password and PIN fields: their text must never reach a translation API.
-bool IsSecureInputScope(InputScope scope) {
-  switch (scope) {
-    case IS_PASSWORD:
-    case IS_NUMERIC_PASSWORD:
-    case IS_NUMERIC_PIN:
-    case IS_ALPHANUMERIC_PIN:
-    case IS_ALPHANUMERIC_PIN_SET:
-      return true;
-    default:
-      return false;
-  }
 }
 
 class SecureFieldReader final : public TipComImplements<ITfEditSession> {
@@ -395,13 +423,15 @@ void BeginTranslation(TipTextService* text_service, ITfContext* context,
                       ? std::wstring()
                       : std::wstring(config.EngineName());
   if (config.engine == TranslationEngine::None) {
-    state->message = kNoApiKeyMessage;
+    state->message = NoApiKeyMessage();
     ShowOverlay(state);
     return;
   }
 
-  // A selection in another language is auto-detected and translated into Japanese.
-  const bool japanese = !selection || HttpTranslator::LooksJapanese(source);
+  // A selection mainly in another language is auto-detected and translated
+  // into Japanese. Any kana or kanji is not enough: a selected document of
+  // English or code often has a Japanese comment.
+  const bool japanese = !selection || SelectionIsJapanese(source);
   state->source_language =
       japanese ? std::wstring(HttpTranslator::Japanese) : std::wstring();
   if (!japanese) {
@@ -418,7 +448,7 @@ void BeginTranslation(TipTextService* text_service, ITfContext* context,
   }
 
   state->loading = true;
-  state->message = kLoadingMessage;
+  state->message = LoadingMessage();
   // One request per text at a time: pressing Shift again shows the same request.
   if (state->pending_key != state->key) {
     state->request_id++;
@@ -429,7 +459,7 @@ void BeginTranslation(TipTextService* text_service, ITfContext* context,
       state->pending_key = state->key;
     } else {
       state->loading = false;
-      state->message = L"翻訳を開始できませんでした";
+      state->message = UiText::Pick(L"翻訳を開始できませんでした", L"Could not start the translation");
     }
   }
   ShowOverlay(state);
@@ -444,24 +474,123 @@ void StartTranslation(TipTextService* text_service, ITfContext* context) {
   }
 }
 
-// The selected text when there is a selection and no composition, else empty.
-std::wstring SelectedText(TipTextService* text_service, ITfContext* context) {
-  TipSurroundingTextInfo info;
-  if (!TipSurroundingText::Get(text_service, context, &info) ||
-      info.in_composition || !info.has_selected_text) {
-    return std::wstring();
+// The selection of the focused standard edit control (EDIT or RichEdit), read
+// directly. Classic Win32 applications reach the IME through IMM32, and there
+// RichEdit hands only short selections (about 100 characters) to the IME while
+// EDIT hands none. The TIP runs on the application's own thread, so it can ask
+// its focused control. Password controls are never read.
+enum class EditControl { kNone, kEdit, kRichEdit };
+
+EditControl KindOfEditControl(HWND window) {
+  if (window == nullptr || !::IsWindowUnicode(window) ||
+      (::GetWindowLongW(window, GWL_STYLE) & ES_PASSWORD) != 0) {
+    return EditControl::kNone;
   }
-  return info.selected_text;
+  wchar_t class_name[32] = {};
+  ::GetClassNameW(window, class_name, static_cast<int>(std::size(class_name)));
+  if (_wcsnicmp(class_name, L"RichEdit", 8) == 0) {
+    return EditControl::kRichEdit;
+  }
+  return _wcsicmp(class_name, L"Edit") == 0 ? EditControl::kEdit
+                                            : EditControl::kNone;
 }
 
-// Commits a translation in place of the composition.
-void Commit(TipTextService* text_service, ITfContext* context, int index) {
+std::wstring SelectedTextOfEditControl(HWND focus) {
+  const EditControl kind = KindOfEditControl(focus);
+  if (kind == EditControl::kRichEdit) {
+    CHARRANGE range = {};
+    ::SendMessageW(focus, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&range));
+    if (range.cpMax <= range.cpMin) {
+      return std::wstring();
+    }
+    std::wstring text(static_cast<size_t>(range.cpMax - range.cpMin) + 1, L'\0');
+    const LRESULT length = ::SendMessageW(focus, EM_GETSELTEXT, 0,
+                                          reinterpret_cast<LPARAM>(&text[0]));
+    text.resize(static_cast<size_t>(std::clamp<LRESULT>(length, 0, text.size() - 1)));
+    return text;
+  }
+  if (kind == EditControl::kEdit) {
+    DWORD start = 0, end = 0;
+    ::SendMessageW(focus, EM_GETSEL, reinterpret_cast<WPARAM>(&start),
+                   reinterpret_cast<LPARAM>(&end));
+    const LRESULT length = ::SendMessageW(focus, WM_GETTEXTLENGTH, 0, 0);
+    if (end <= start || length <= 0 || end > static_cast<DWORD>(length)) {
+      return std::wstring();
+    }
+    std::wstring text(static_cast<size_t>(length) + 1, L'\0');
+    const LRESULT copied = ::SendMessageW(focus, WM_GETTEXT, text.size(),
+                                          reinterpret_cast<LPARAM>(&text[0]));
+    text.resize(static_cast<size_t>(std::max<LRESULT>(copied, 0)));
+    return end <= text.size() ? text.substr(start, end - start) : std::wstring();
+  }
+  return std::wstring();
+}
+
+// The selected text when there is a selection and no composition, else empty.
+// |*control| is the edit control it was read from directly, else nullptr.
+std::wstring SelectedText(TipTextService* text_service, ITfContext* context,
+                          HWND* control) {
+  *control = nullptr;
+  TipSurroundingTextInfo info;
+  const bool read = TipSurroundingText::Get(text_service, context, &info);
+  Trace("selection: tsf=%d composing=%d has=%d length=%zu", read ? 1 : 0,
+        info.in_composition ? 1 : 0, info.has_selected_text ? 1 : 0,
+        info.selected_text.size());
+  if (read) {
+    if (info.in_composition) {
+      return std::wstring();
+    }
+    if (info.has_selected_text && !info.selected_text.empty()) {
+      return info.selected_text;
+    }
+  }
+  HWND focus = ::GetFocus();
+  std::wstring text = SelectedTextOfEditControl(focus);
+  Trace("selection: control kind=%d length=%zu", static_cast<int>(KindOfEditControl(focus)),
+        text.size());
+  if (!text.empty()) {
+    *control = focus;
+  }
+  return text;
+}
+
+// Replaces the selection of |control| (a selection read from it directly) with
+// |text|, as one undoable edit. Through IMM32 a long result would be cut, so
+// the control does it itself. False when |control| is no longer the place.
+bool ReplaceSelectionOfEditControl(HWND control, const std::wstring& text) {
+  if (control == nullptr || control != ::GetFocus()) {
+    return false;
+  }
+  const EditControl kind = KindOfEditControl(control);
+  if (kind == EditControl::kNone) {
+    return false;
+  }
+  std::wstring replacement;
+  replacement.reserve(text.size() + 16);
+  for (size_t i = 0; i < text.size(); ++i) {
+    // An EDIT control shows a lone \n as a box: give it \r\n.
+    if (kind == EditControl::kEdit && text[i] == L'\n' &&
+        (i == 0 || text[i - 1] != L'\r')) {
+      replacement += L'\r';
+    }
+    replacement += text[i];
+  }
+  ::SendMessageW(control, EM_REPLACESEL, TRUE,
+                 reinterpret_cast<LPARAM>(replacement.c_str()));
+  return true;
+}
+
+// Commits a translation in place of the composition. |async| when called
+// outside a key event (an edit session cannot be synchronous there).
+void Commit(TipTextService* text_service, ITfContext* context, int index,
+            bool async = false) {
   State* state = GetState();
   if (index < 0 || index >= static_cast<int>(state->items.size())) {
     return;
   }
   const std::wstring text = state->items[index].text;
   const bool selection = state->selection;
+  const HWND edit_control = state->edit_control;
   Output output = state->original;
   state->overlay_label.clear();   // nothing to restore: the commit replaces it
   EndTranslation(state);
@@ -475,6 +604,16 @@ void Commit(TipTextService* text_service, ITfContext* context, int index) {
     output.clear_candidate_window();
     output.clear_preedit();
     output.clear_all_candidate_words();
+    if (ReplaceSelectionOfEditControl(edit_control, text)) {
+      // Done by the control; the output only closes the candidate window.
+      output.set_consumed(true);
+      if (async) {
+        TipEditSession::OnOutputReceivedAsync(text_service, context, std::move(output));
+      } else {
+        TipEditSession::OnOutputReceivedSync(text_service, context, std::move(output));
+      }
+      return;
+    }
   } else {
     // Drop the composition on the server, then commit the translation instead.
     output.Clear();
@@ -488,18 +627,14 @@ void Commit(TipTextService* text_service, ITfContext* context, int index) {
   Result* result = output.mutable_result();
   result->set_type(Result::STRING);
   result->set_value(WideToUtf8(text));
-  TipEditSession::OnOutputReceivedSync(text_service, context, std::move(output));
+  if (async) {
+    TipEditSession::OnOutputReceivedAsync(text_service, context, std::move(output));
+  } else {
+    TipEditSession::OnOutputReceivedSync(text_service, context, std::move(output));
+  }
 }
 
-enum class Action {
-  kNone,      // not ours: Mozc handles the key
-  kToggle,    // Shift released alone
-  kTranslateSelection,  // Shift+Henkan with a selection
-  kNext,
-  kPrevious,
-  kCommit,
-  kCancel,
-};
+using Action = TranslationAction;
 
 // Decides what a key does. |index| is set for kCommit.
 Action Decide(TipTextService* text_service, ITfContext* context,
@@ -510,7 +645,13 @@ Action Decide(TipTextService* text_service, ITfContext* context,
   }
   const bool shown = state->active && state->context.get() == context;
   *index = state->selected;
+  Trace("key vk=0x%02X %s active=%d shown=%d selection=%d items=%zu shift_pending=%d",
+        static_cast<unsigned>(vk), is_key_down ? "down" : "up", state->active ? 1 : 0,
+        shown ? 1 : 0, state->selection ? 1 : 0, state->items.size(),
+        state->shift_pending ? 1 : 0);
 
+  // The checks that need an edit session (IsComposing, IsSecureField,
+  // SelectedText) come last, so that they run only for the trigger keys.
   if (!is_key_down) {
     if (vk == VK_SHIFT && state->shift_pending) {
       if (shown) {
@@ -521,65 +662,33 @@ Action Decide(TipTextService* text_service, ITfContext* context,
         return Action::kToggle;
       }
     }
-    return Action::kNone;
+    // While the translations are shown, key releases are ours as well. Mozc
+    // answers a release (Shift after Shift+Henkan or Shift+Tab, for one) with
+    // a new output that would replace the translations, and the next key would
+    // then reach the application: Enter would replace the selected text.
+    return shown ? Action::kWait : Action::kNone;
   }
 
   if (!shown) {
-    // Shift+Henkan translates the selection (Henkan alone is Mozc's reconversion).
-    if (vk == VK_CONVERT && IsDown(VK_SHIFT) && !IsDown(VK_CONTROL) &&
-        !IsDown(VK_MENU) && !IsComposing(text_service, context) &&
+    if (IsSelectionTranslationKey(vk, CurrentModifiers())) {
+      Trace("Shift+Henkan: composing=%d enabled=%d secure=%d",
+            IsComposing(text_service, context) ? 1 : 0,
+            TranslationConfig::Load().enabled ? 1 : 0,
+            IsSecureField(text_service, context) ? 1 : 0);
+    }
+    if (IsSelectionTranslationKey(vk, CurrentModifiers()) &&
+        !IsComposing(text_service, context) &&
         TranslationConfig::Load().enabled && !IsSecureField(text_service, context)) {
-      state->pending_selection = SelectedText(text_service, context);
+      state->pending_selection =
+          SelectedText(text_service, context, &state->pending_control);
       if (!state->pending_selection.empty()) {
         return Action::kTranslateSelection;
       }
     }
     return Action::kNone;
   }
-  if (vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU) {
-    return Action::kNone;
-  }
-  if (IsDown(VK_CONTROL) || IsDown(VK_MENU)) {
-    return Action::kCancel;
-  }
-  const bool has_items = !state->items.empty();
-  switch (vk) {
-    case VK_DOWN:
-    case VK_SPACE:
-    case VK_CONVERT:
-      return Action::kNext;
-    case VK_TAB:
-      return IsDown(VK_SHIFT) ? Action::kPrevious : Action::kNext;
-    case VK_UP:
-      return Action::kPrevious;
-    case VK_RETURN:
-      // Nothing to commit yet: back to the conversion, which Enter commits.
-      return has_items ? Action::kCommit : Action::kCancel;
-    case VK_ESCAPE:
-    case VK_BACK:
-      return Action::kCancel;
-    default:
-      break;
-  }
-  if (vk >= '1' && vk <= '9' && !IsDown(VK_SHIFT)) {
-    const int number = static_cast<int>(vk - '1');
-    if (number < static_cast<int>(state->items.size())) {
-      *index = number;
-      return Action::kCommit;
-    }
-  }
-  return Action::kCancel;
-}
-
-// Keys that end the translation UI without being consumed (e.g. typing goes on).
-bool PassesThroughAfterCancel(WPARAM vk, bool has_items) {
-  if (vk == VK_ESCAPE || vk == VK_BACK) {
-    return false;
-  }
-  if (vk == VK_RETURN) {
-    return !has_items;
-  }
-  return true;
+  return DecideShownKeyDown(vk, CurrentModifiers(), state->items.size(),
+                            state->selected, index, state->selection);
 }
 
 }  // namespace
@@ -592,8 +701,7 @@ void TrackKey(State* state, bool is_key_down, WPARAM wparam) {
   if (is_key_down) {
     // The first key typed loads the API keys in the background (TPM).
     TranslationConfig::PreloadKeysAsync();
-    state->shift_pending =
-        (wparam == VK_SHIFT) && !IsDown(VK_CONTROL) && !IsDown(VK_MENU);
+    state->shift_pending = StartsShiftTap(wparam, CurrentModifiers());
   }
 }
 
@@ -644,20 +752,23 @@ bool TipTranslation::OnKey(TipTextService* text_service, ITfContext* context,
       break;
     case Action::kTranslateSelection: {
       const std::wstring text = state->pending_selection;
+      const HWND control = state->pending_control;
       state->pending_selection.clear();
+      state->pending_control = nullptr;
       BeginTranslation(text_service, context, text, true);
+      state->edit_control = control;
       break;
     }
     case Action::kNext:
       if (count > 0) {
-        state->selected = (state->selected + 1) % count;
+        state->selected = NextIndex(state->selected, count);
         state->moved = true;
         ShowOverlay(state);
       }
       break;
     case Action::kPrevious:
       if (count > 0) {
-        state->selected = (state->selected + count - 1) % count;
+        state->selected = PreviousIndex(state->selected, count);
         state->moved = true;
         ShowOverlay(state);
       }
@@ -672,8 +783,55 @@ bool TipTranslation::OnKey(TipTextService* text_service, ITfContext* context,
       }
       EndTranslation(state);
       break;
+    case Action::kWait:
+      break;
   }
   *eaten = TRUE;
+  return true;
+}
+
+namespace {
+
+// The translations shown in |context|, or nullptr.
+State* ShownIn(ITfContext* context) {
+  State* state = g_state;
+  if (state == nullptr || !state->active || state->context.get() != context) {
+    return nullptr;
+  }
+  if (!OverlayInPlace(state)) {
+    EndTranslation(state);   // Mozc moved on
+    return nullptr;
+  }
+  return state;
+}
+
+}  // namespace
+
+bool TipTranslation::OnUiElementSelect(TipTextService* text_service,
+                                       ITfContext* context, UINT index) {
+  State* state = ShownIn(context);
+  if (state == nullptr) {
+    return false;
+  }
+  if (index < state->items.size()) {
+    state->selected = static_cast<int>(index);
+    state->moved = true;
+    ShowOverlay(state);
+  }
+  return true;
+}
+
+bool TipTranslation::OnUiElementFinalize(TipTextService* text_service,
+                                         ITfContext* context, bool commit) {
+  State* state = ShownIn(context);
+  if (state == nullptr) {
+    return false;
+  }
+  if (commit && !state->items.empty()) {
+    Commit(text_service, context, state->selected, /*async=*/true);
+  } else {
+    EndTranslation(state);   // back to the conversion (or the selection)
+  }
   return true;
 }
 
@@ -693,7 +851,8 @@ void BuildCandidateWindow(State* state, Output* output) {
       CandidateWindow::Candidate* candidate = window->add_candidate();
       candidate->set_index(static_cast<uint32_t>(i));
       candidate->set_id(static_cast<int32_t>(i));
-      candidate->set_value(WideToUtf8(state->items[i].text));
+      candidate->set_value(WideToUtf8(CandidatePreview(
+          state->items[i].text, kPreviewLines, kPreviewWidth)));
       candidate->mutable_annotation()->set_description(
           WideToUtf8(state->items[i].language));
       if (i < 9) {
@@ -711,15 +870,31 @@ void BuildCandidateWindow(State* state, Output* output) {
   }
 
   commands::Footer* footer = window->mutable_footer();
-  const std::wstring name = state->selection ? L"選択範囲を翻訳" : L"翻訳";
+  const std::wstring name = state->selection ? UiText::Pick(L"選択範囲を翻訳", L"Translate selection") : UiText::Pick(L"翻訳", L"Translate");
   const std::wstring title =
       state->engine.empty() ? name : name + L" (" + state->engine + L")";
-  const std::wstring hints = state->selection ? L"  Enter: 置き換え  Esc: キャンセル"
-                                              : L"  Enter: 確定  Shift: 戻る";
+  const std::wstring hints = state->selection ? UiText::Pick(L"  Enter: 置き換え  Esc: キャンセル", L"  Enter: replace  Esc: cancel")
+                                              : UiText::Pick(L"  Enter: 確定  Shift: 戻る", L"  Enter: insert  Shift: back");
   footer->set_label(WideToUtf8(
       state->note.empty() ? title + hints : title + L"  " + state->note));
   footer->set_index_visible(!state->items.empty());
-  output->clear_all_candidate_words();
+
+  // The candidate list UI element reads all_candidate_words: applications that
+  // draw the candidates themselves and screen readers see the same list.
+  commands::CandidateList* words = output->mutable_all_candidate_words();
+  words->Clear();
+  words->set_category(commands::CONVERSION);
+  for (int i = 0; i < window->candidate_size(); ++i) {
+    const CandidateWindow::Candidate& candidate = window->candidate(i);
+    commands::CandidateWord* word = words->add_candidates();
+    word->set_id(candidate.id());
+    word->set_index(static_cast<uint32_t>(i));
+    word->set_value(candidate.value());
+    if (candidate.has_annotation()) {
+      *word->mutable_annotation() = candidate.annotation();
+    }
+  }
+  words->set_focused_index(state->items.empty() ? 0 : static_cast<uint32_t>(state->selected));
 }
 
 }  // namespace

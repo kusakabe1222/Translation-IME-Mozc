@@ -15,6 +15,7 @@ load(
     "//:build_defs.bzl",
     "MOZC_TAGS",
     "mozc_cc_library",
+    "mozc_cc_test",
 )
 
 package(default_visibility = ["//win32/tip:__subpackages__"])
@@ -33,6 +34,7 @@ mozc_cc_library(
         "KeyProtection.h",
         "TranslationCache.h",
         "TranslationConfig.h",
+        "UiText.h",
     ],
     linkopts = ["advapi32.lib"],
     tags = MOZC_TAGS.WIN_ONLY,
@@ -40,5 +42,19 @@ mozc_cc_library(
     visibility = [
         "//win32/tip:__subpackages__",
         "//win32/translation_settings:__pkg__",
+    ],
+)
+
+# Offline tests (no registry, TPM or network).
+mozc_cc_test(
+    name = "translation_test",
+    size = "small",
+    srcs = ["translation_test.cc"],
+    tags = MOZC_TAGS.WIN_ONLY,
+    target_compatible_with = ["@platforms//os:windows"],
+    deps = [
+        ":translation",
+        "//bazel/win32:user32",
+        "//testing:gunit_main",
     ],
 )

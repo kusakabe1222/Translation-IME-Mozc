@@ -55,6 +55,56 @@ BEGIN
     DEFPUSHBUTTON   "保存", IDOK, 254, 284, 54, 15
 END
 
+// English, for Windows displayed in any other language (the app picks it with
+// SetThreadUILanguage). Same layout and control IDs as the Japanese dialog.
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+
+IDD_SETTINGS DIALOGEX 0, 0, 320, 304
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
+CAPTION "Translation IME Settings"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "", IDC_HEADER, 0, 0, 320, 28, NOT WS_VISIBLE
+
+    LTEXT           "Translation engine", IDC_SECTION_ENGINE, 14, 36, 120, 10
+    CONTROL         "DeepL (recommended)", IDC_ENGINE_DEEPL, "Button", BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 14, 49, 92, 10
+    CONTROL         "Google Cloud Translation", IDC_ENGINE_GOOGLE, "Button", BS_AUTORADIOBUTTON, 110, 49, 120, 10
+
+    LTEXT           "DeepL key", IDC_DEEPL_LABEL, 14, 65, 54, 9
+    EDITTEXT        IDC_DEEPL_KEY, 70, 63, 196, 13, ES_AUTOHSCROLL | ES_PASSWORD | WS_GROUP
+    CONTROL         "Show", IDC_DEEPL_SHOW, "Button", BS_AUTOCHECKBOX | BS_PUSHLIKE | WS_TABSTOP, 270, 62, 36, 15
+
+    LTEXT           "Google key", IDC_GOOGLE_LABEL, 14, 82, 54, 9
+    EDITTEXT        IDC_GOOGLE_KEY, 70, 80, 196, 13, ES_AUTOHSCROLL | ES_PASSWORD
+    CONTROL         "Show", IDC_GOOGLE_SHOW, "Button", BS_AUTOCHECKBOX | BS_PUSHLIKE | WS_TABSTOP, 270, 79, 36, 15
+
+    PUSHBUTTON      "Test connection", IDC_TEST, 14, 99, 66, 15
+    LTEXT           "", IDC_TEST_RESULT, 86, 102, 220, 9, SS_ENDELLIPSIS | SS_NOPREFIX
+
+    LTEXT           "DeepL usage", IDC_USAGE_LABEL, 14, 120, 60, 9
+    CONTROL         "", IDC_USAGE_BAR, "msctls_progress32", WS_BORDER, 80, 121, 130, 7
+    LTEXT           "", IDC_USAGE_TEXT, 216, 120, 90, 9, SS_RIGHT | SS_NOPREFIX
+
+    LTEXT           "Target languages", IDC_SECTION_LANGUAGES, 14, 138, 80, 10
+    LTEXT           "Each language uses API characters", IDC_LANGUAGE_HINT, 100, 139, 206, 9, SS_RIGHT
+
+    LTEXT           "Other", IDC_SECTION_OTHER, 14, 220, 80, 10
+    CONTROL         "Use translation", IDC_ENABLED, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 210, 219, 96, 10
+    LTEXT           "Timeout", IDC_TIMEOUT_LABEL, 14, 235, 50, 9
+    EDITTEXT        IDC_TIMEOUT, 66, 233, 30, 13, ES_NUMBER | ES_RIGHT
+    CONTROL         "", IDC_TIMEOUT_SPIN, "msctls_updown32", UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_AUTOBUDDY | UDS_ARROWKEYS | UDS_NOTHOUSANDS, 96, 233, 10, 13
+    LTEXT           "s", IDC_TIMEOUT_UNIT, 102, 235, 20, 9
+    LTEXT           "", IDC_KEY_PROTECTION, 126, 235, 180, 9, SS_RIGHT | SS_NOPREFIX
+
+    LTEXT           "", IDC_USAGE_HELP, 14, 252, 292, 20, SS_NOPREFIX
+
+    LTEXT           "", IDC_FOOTER, 0, 278, 320, 26, NOT WS_VISIBLE
+    PUSHBUTTON      "Cancel", IDCANCEL, 196, 284, 54, 15
+    DEFPUSHBUTTON   "Save", IDOK, 254, 284, 54, 15
+END
+
+LANGUAGE LANG_JAPANESE, SUBLANG_DEFAULT
+
 #ifndef MOZC_RES_INTERNAL_NAME
   #if defined(GOOGLE_JAPANESE_INPUT_BUILD)
     #define MOZC_RES_INTERNAL_NAME "GoogleIMEJaTranslationSettings"
@@ -70,7 +120,7 @@ END
   #endif
 #endif
 #ifndef MOZC_RES_FILE_DESCRIPTION
-  #define MOZC_RES_FILE_DESCRIPTION "Translation IME 設定"
+  #define MOZC_RES_FILE_DESCRIPTION "Translation IME Settings"
 #endif
 #ifndef MOZC_RES_FILETYPE
   #define MOZC_RES_FILETYPE VFT_APP

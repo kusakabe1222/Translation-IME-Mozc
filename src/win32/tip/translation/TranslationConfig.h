@@ -32,8 +32,12 @@ enum class TranslationEngine
 
 struct LanguageInfo
 {
-    const wchar_t* code;    // e.g. L"EN"
-    const wchar_t* name;    // Japanese display name, e.g. L"英語"
+    const wchar_t* code;          // e.g. L"EN"
+    const wchar_t* name;          // Japanese display name, e.g. L"英語"
+    const wchar_t* englishName;   // e.g. L"English"
+
+    // The name in the user's display language (UiText).
+    const wchar_t* DisplayName() const;
 };
 
 struct TranslationConfig

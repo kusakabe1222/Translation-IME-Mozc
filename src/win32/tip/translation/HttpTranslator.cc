@@ -7,6 +7,7 @@
 #include <thread>
 
 #include "Json.h"
+#include "UiText.h"
 
 #pragma comment(lib, "winhttp.lib")
 
@@ -210,7 +211,7 @@ TranslationItem TranslateOne(HINTERNET session, const TranslationConfig& config,
     const std::wstring& apiKey = config.ActiveApiKey();
     if (!IsValidApiKey(apiKey))
     {
-        item.error = L"APIキーの形式が正しくありません";
+        item.error = UiText::Pick(L"APIキーの形式が正しくありません", L"The API key is not in the right format");
         return item;
     }
 
@@ -269,7 +270,7 @@ TranslationItem TranslateOne(HINTERNET session, const TranslationConfig& config,
     if (!parsed || item.text.empty())
     {
         item.text.clear();
-        item.error = L"応答を解析できませんでした";
+        item.error = UiText::Pick(L"応答を解析できませんでした", L"Could not read the response");
         return item;
     }
 
@@ -325,7 +326,7 @@ DWORD WINAPI TranslationThreadProc(LPVOID param)
                 failed->requestId = job->requestId;
                 failed->sourceText = job->text;
                 failed->sourceLanguage = job->sourceLanguage;
-                failed->error = L"翻訳中にエラーが発生しました";
+                failed->error = UiText::Pick(L"翻訳中にエラーが発生しました", L"An error occurred while translating");
                 job->mailbox->Post(std::move(failed));
             }
             catch (...)
@@ -378,7 +379,7 @@ std::wstring TranslationResult::FirstError() const
     {
         if (!item.succeeded && !item.error.empty()) return item.error;
     }
-    return L"翻訳に失敗しました";
+    return UiText::Pick(L"翻訳に失敗しました", L"Translation failed");
 }
 
 //+---------------------------------------------------------------------------
@@ -564,30 +565,30 @@ std::wstring DescribeHttpError(DWORD status, const std::wstring& body)
         // Google reports why the key was refused in error.details[].reason.
         if (body.find(L"API_KEY_SERVICE_BLOCKED") != std::wstring::npos)
         {
-            message = L"このキーでは Cloud Translation API が許可されていません (Google Cloud Console でキーの「API の制限」に追加してください)";
+            message = UiText::Pick(L"このキーでは Cloud Translation API が許可されていません (Google Cloud Console でキーの「API の制限」に追加してください)", L"This key may not use the Cloud Translation API (add it under \"API restrictions\" for the key in the Google Cloud Console)");
         }
         else if (body.find(L"SERVICE_DISABLED") != std::wstring::npos)
         {
-            message = L"Cloud Translation API が有効になっていません";
+            message = UiText::Pick(L"Cloud Translation API が有効になっていません", L"The Cloud Translation API is not enabled");
         }
         else
         {
-            message = L"認証エラー: APIキーを確認してください";
+            message = UiText::Pick(L"認証エラー: APIキーを確認してください", L"Authentication failed: check the API key");
         }
         break;
-    case 429: message = L"リクエストが多すぎます"; break;
-    case 456: message = L"DeepLの利用上限に達しました"; break;
+    case 429: message = UiText::Pick(L"リクエストが多すぎます", L"Too many requests"); break;
+    case 456: message = UiText::Pick(L"DeepLの利用上限に達しました", L"The DeepL usage limit has been reached"); break;
     default:
         if (status >= 500)
         {
-            message = L"サーバーエラー";
+            message = UiText::Pick(L"サーバーエラー", L"Server error");
         }
         else
         {
             message = ExtractApiErrorMessage(body);
             if (message.empty())
             {
-                message = L"リクエストエラー";
+                message = UiText::Pick(L"リクエストエラー", L"Request error");
             }
         }
         break;
@@ -614,19 +615,19 @@ std::wstring DescribeNetworkError(DWORD error)
     switch (error)
     {
     case ERROR_WINHTTP_TIMEOUT:
-        return L"タイムアウトしました";
+        return UiText::Pick(L"タイムアウトしました", L"Timed out");
     case ERROR_WINHTTP_NAME_NOT_RESOLVED:
     case ERROR_WINHTTP_CANNOT_CONNECT:
     case ERROR_WINHTTP_CONNECTION_ERROR:
-        return L"サーバーに接続できません (" + std::to_wstring(error) + L")";
+        return UiText::Pick(L"サーバーに接続できません (", L"Cannot connect to the server (") + std::to_wstring(error) + L")";
     case ERROR_WINHTTP_INVALID_SERVER_RESPONSE:
-        return L"サーバーとの通信が途中で切れました (" + std::to_wstring(error) + L")";
+        return UiText::Pick(L"サーバーとの通信が途中で切れました (", L"The connection to the server was cut (") + std::to_wstring(error) + L")";
     case ERROR_WINHTTP_SECURE_FAILURE:
-        return L"安全な接続を確立できません";
+        return UiText::Pick(L"安全な接続を確立できません", L"Cannot establish a secure connection");
     case ERROR_ACCESS_DENIED:
-        return L"このアプリからは通信できません";
+        return UiText::Pick(L"このアプリからは通信できません", L"This application may not connect to the internet");
     default:
-        return L"通信エラー (" + std::to_wstring(error) + L")";
+        return UiText::Pick(L"通信エラー (", L"Network error (") + std::to_wstring(error) + L")";
     }
 }
 
@@ -652,7 +653,7 @@ bool GetDeepLUsage(const TranslationConfig& config, DeepLUsage* usage, std::wstr
 {
     if (!IsValidApiKey(config.deeplApiKey))
     {
-        *error = L"DeepL の API キーが未設定です";
+        *error = UiText::Pick(L"DeepL の API キーが未設定です", L"No DeepL API key is set");
         return false;
     }
 
@@ -679,7 +680,7 @@ bool GetDeepLUsage(const TranslationConfig& config, DeepLUsage* usage, std::wstr
     }
     if (!ParseDeepLUsage(body, usage))
     {
-        *error = L"応答を解析できませんでした";
+        *error = UiText::Pick(L"応答を解析できませんでした", L"Could not read the response");
         return false;
     }
     return true;
@@ -694,22 +695,22 @@ TranslationResult Translate(const TranslationConfig& config, const std::wstring&
 
     if (config.engine == TranslationEngine::None)
     {
-        result.error = L"APIキーが未設定です";
+        result.error = UiText::Pick(L"APIキーが未設定です", L"No API key is set");
         return result;
     }
     if (text.empty())
     {
-        result.error = L"翻訳する文字がありません";
+        result.error = UiText::Pick(L"翻訳する文字がありません", L"Nothing to translate");
         return result;
     }
     if (text.length() > kMaxSourceChars)
     {
-        result.error = L"文字数が多すぎます";
+        result.error = UiText::Pick(L"文字数が多すぎます (5,000 文字まで)", L"The text is too long (5,000 characters at most)");
         return result;
     }
     if (config.targetLanguages.empty())
     {
-        result.error = L"翻訳先の言語が設定されていません";
+        result.error = UiText::Pick(L"翻訳先の言語が設定されていません", L"No target language is set");
         return result;
     }
 

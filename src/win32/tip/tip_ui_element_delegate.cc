@@ -53,6 +53,7 @@
 #include "win32/tip/tip_private_context.h"
 #include "win32/tip/tip_resource.h"
 #include "win32/tip/tip_text_service.h"
+#include "win32/tip/tip_translation.h"
 
 namespace mozc {
 namespace win32 {
@@ -399,6 +400,10 @@ class TipUiElementDelegateImpl final : public TipUiElementDelegate {
   HRESULT SetSelection(UINT index) override {
     DCHECK(IsCandidateWindowLike());
 
+    if (TipTranslation::OnUiElementSelect(text_service_.get(), context_.get(),
+                                          index)) {
+      return S_OK;
+    }
     TipPrivateContext* private_context =
         text_service_->GetPrivateContext(context_.get());
     if (private_context == nullptr) {
@@ -423,6 +428,10 @@ class TipUiElementDelegateImpl final : public TipUiElementDelegate {
   HRESULT Finalize() override {
     DCHECK(IsCandidateWindowLike());
 
+    if (TipTranslation::OnUiElementFinalize(text_service_.get(), context_.get(),
+                                            /*commit=*/true)) {
+      return S_OK;
+    }
     if (!TipEditSession::SubmitAsync(text_service_.get(), context_.get())) {
       return E_FAIL;
     }
@@ -432,6 +441,11 @@ class TipUiElementDelegateImpl final : public TipUiElementDelegate {
   HRESULT Abort() override {
     DCHECK(IsCandidateWindowLike());
 
+    // Translations shown: back to the conversion.
+    if (TipTranslation::OnUiElementFinalize(text_service_.get(), context_.get(),
+                                            /*commit=*/false)) {
+      return S_OK;
+    }
     // Currently equals to Finalize().
     if (!TipEditSession::SubmitAsync(text_service_.get(), context_.get())) {
       return E_FAIL;
