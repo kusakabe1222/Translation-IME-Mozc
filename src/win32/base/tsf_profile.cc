@@ -54,19 +54,21 @@ static const GUID kGoogleJapaneseInputProfile = {
 
 #else  // GOOGLE_JAPANESE_INPUT_BUILD
 
-// {10A67BC8-22FA-4A59-90DC-2546652C56BF}
+// Translation IME (not Mozc's {10A67BC8-...} / {186F700C-...}, so that both
+// can be installed).
+// {F97625AB-6601-4B6B-936B-F52405DBA02E}
 static const GUID kMozcTextService = {
-    0x10a67bc8,
-    0x22fa,
-    0x4a59,
-    {0x90, 0xdc, 0x25, 0x46, 0x65, 0x2c, 0x56, 0xbf}};
+    0xf97625ab,
+    0x6601,
+    0x4b6b,
+    {0x93, 0x6b, 0xf5, 0x24, 0x05, 0xdb, 0xa0, 0x2e}};
 
-// {186F700C-71CF-43FE-A00E-AACB1D9E6D3D}
+// {C0F9F8C8-B4A9-4C53-AFF1-47B7185479A1}
 static const GUID kMozcProfile = {
-    0x186f700c,
-    0x71cf,
-    0x43fe,
-    {0xa0, 0x0e, 0xaa, 0xcb, 0x1d, 0x9e, 0x6d, 0x3d}};
+    0xc0f9f8c8,
+    0xb4a9,
+    0x4c53,
+    {0xaf, 0xf1, 0x47, 0xb7, 0x18, 0x54, 0x79, 0xa1}};
 
 #endif  // GOOGLE_JAPANESE_INPUT_BUILD
 
